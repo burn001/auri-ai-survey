@@ -1,0 +1,33 @@
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from config import get_settings
+
+_client: AsyncIOMotorClient | None = None
+_db: AsyncIOMotorDatabase | None = None
+
+
+async def connect():
+    global _client, _db
+    s = get_settings()
+    _client = AsyncIOMotorClient(
+        s.MONGODB_URI,
+        maxPoolSize=50,
+        minPoolSize=2,
+        maxIdleTimeMS=300_000,
+        serverSelectionTimeoutMS=5_000,
+    )
+    _db = _client[s.MONGODB_DB]
+    await _db.participants.create_index("token", unique=True)
+    await _db.participants.create_index("email", unique=True)
+    await _db.responses.create_index("token")
+
+
+async def disconnect():
+    global _client
+    if _client:
+        _client.close()
+
+
+def get_db() -> AsyncIOMotorDatabase:
+    if _db is None:
+        raise RuntimeError("Database not connected")
+    return _db

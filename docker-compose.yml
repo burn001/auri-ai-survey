@@ -1,0 +1,32 @@
+services:
+  auri-survey-api:
+    build:
+      context: ./backend
+    container_name: auri-survey-api
+    ports:
+      - "8001:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      - TZ=Asia/Seoul
+    volumes:
+      - ./backend/logs:/app/logs:rw
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - mongodb
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  mongodb:
+    external: true
+    name: docker_search-community

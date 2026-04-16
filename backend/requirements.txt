@@ -1,0 +1,6 @@
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+motor==3.7.0
+pydantic==2.11.3
+openpyxl==3.1.5
+python-dotenv==1.1.0
