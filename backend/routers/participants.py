@@ -1,7 +1,14 @@
 from fastapi import APIRouter, HTTPException, Header
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 from typing import Optional
+from datetime import datetime, timezone
 from services.db import get_db
+from services.email_service import render_email, send_email
 from config import get_settings
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -164,3 +171,76 @@ async def list_participants(
     results = [doc async for doc in cursor]
     total = await db.participants.count_documents(query)
     return {"total": total, "count": len(results), "data": results}
+
+
+# ── Email ──
+
+class EmailSendRequest(BaseModel):
+    tokens: list[str]
+    subject: str = "건축 분야 AI 설문조사 참여 요청 (AURI)"
+
+
+@router.post("/email/preview", response_class=HTMLResponse)
+async def email_preview(
+    token: str = "preview",
+    x_admin_key: Optional[str] = Header(None),
+):
+    _check_admin(x_admin_key)
+    s = get_settings()
+    url = f"{s.SURVEY_BASE_URL}/?token=SAMPLE_TOKEN"
+    return render_email("홍길동", "예시기관", url)
+
+
+@router.post("/email/send")
+async def send_survey_emails(
+    body: EmailSendRequest,
+    x_admin_key: Optional[str] = Header(None),
+):
+    _check_admin(x_admin_key)
+    s = get_settings()
+    if not s.GMAIL_USER or not s.GMAIL_APP_PASSWORD:
+        raise HTTPException(500, "Gmail 설정이 없습니다.")
+
+    db = get_db()
+    results = {"sent": 0, "failed": 0, "skipped": 0, "errors": []}
+
+    for token in body.tokens:
+        p = await db.participants.find_one({"token": token})
+        if not p:
+            results["skipped"] += 1
+            continue
+
+        survey_url = f"{s.SURVEY_BASE_URL}/?token={token}"
+        html = render_email(p.get("name", ""), p.get("org", ""), survey_url)
+
+        try:
+            send_email(p["email"], body.subject, html)
+            await db.participants.update_one(
+                {"token": token},
+                {"$set": {
+                    "email_sent": True,
+                    "email_sent_at": datetime.now(timezone.utc),
+                }},
+            )
+            results["sent"] += 1
+        except Exception as e:
+            logger.error(f"Email failed for {p['email']}: {e}")
+            results["failed"] += 1
+            results["errors"].append({"token": token, "email": p["email"], "error": str(e)})
+
+    return results
+
+
+@router.get("/email/history")
+async def email_history(
+    x_admin_key: Optional[str] = Header(None),
+    category: Optional[str] = None,
+):
+    _check_admin(x_admin_key)
+    db = get_db()
+    query = {"email_sent": True}
+    if category:
+        query["category"] = category
+    sent_count = await db.participants.count_documents(query)
+    total = await db.participants.count_documents({"category": category} if category else {})
+    return {"sent": sent_count, "total": total}

@@ -25,11 +25,14 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install and build
+      - name: Install and build survey app
         working-directory: frontend
         run: |
           npm install
           npm run build
+
+      - name: Copy admin dashboard to dist
+        run: cp -r frontend/admin frontend/dist/admin
 
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -6,3 +6,4 @@ backend/.env
 backend/logs/
 .venv/
 venv/
+__pycache__/
