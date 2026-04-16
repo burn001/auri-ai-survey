@@ -54,7 +54,7 @@ body {
   max-width: var(--max-w);
   width: 100%;
   margin: 0 auto;
-  padding: 24px 20px 120px;
+  padding: 56px 20px 120px;
 }
 
 /* ── Progress Bar ── */
@@ -103,7 +103,7 @@ body {
 
 /* ── Header / Intro ── */
 .survey-header {
-  margin-top: 52px;
+  margin-top: 8px;
   margin-bottom: 48px;
 }
 
