@@ -4,23 +4,38 @@ const STORAGE_KEY = 'auri_survey_responses';
 const STORAGE_PAGE_KEY = 'auri_survey_page';
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
+const GATE = {
+  LOADING: 'loading',
+  DENIED: 'denied',
+  RESUBMIT_CHOICE: 'resubmit_choice',
+  READ_ONLY: 'read_only',
+  OPEN: 'open',
+};
+
+const EDIT_MODE = {
+  NEW: 'new',
+  EDIT: 'edit',
+};
+
 export class SurveyEngine {
   constructor(container) {
     this.container = container;
     this.token = new URLSearchParams(window.location.search).get('token');
     this.participant = null;
     this.submitted = false;
+    this.submittedAt = null;
+    this.updatedAt = null;
+    this.editMode = EDIT_MODE.NEW;
+    this.gate = this.token ? GATE.LOADING : GATE.DENIED;
     this.responses = this.loadResponses();
-    this.currentPage = 0; // 0 = intro
+    this.currentPage = 0;
     this.visibleSections = [];
+    this.editingParticipant = false;
+    this.participantFormError = '';
 
     if (this.token) {
-      this.verifyToken().then(() => {
-        this.updateVisibleSections();
-        this.render();
-      });
+      this.verifyToken().then(() => this.render());
     } else {
-      this.updateVisibleSections();
       this.render();
     }
   }
@@ -29,18 +44,23 @@ export class SurveyEngine {
     try {
       const res = await fetch(`${API_BASE}/api/survey/${this.token}`);
       if (!res.ok) {
-        this.token = null;
+        this.gate = GATE.DENIED;
         return;
       }
       const data = await res.json();
       this.participant = data;
+      this.submittedAt = data.submitted_at || null;
+      this.updatedAt = data.updated_at || null;
       if (data.has_responded && data.responses) {
         this.responses = { ...this.responses, ...data.responses };
         this.saveResponses();
         this.submitted = true;
+        this.gate = GATE.RESUBMIT_CHOICE;
+      } else {
+        this.gate = GATE.OPEN;
       }
     } catch {
-      // API unavailable — continue in offline mode
+      this.gate = GATE.DENIED;
     }
   }
 
@@ -72,8 +92,21 @@ export class SurveyEngine {
     });
   }
 
-  // ── Rendering ──
+  // ── Render Router ──
   render() {
+    if (this.gate === GATE.LOADING) {
+      this.renderLoading();
+      return;
+    }
+    if (this.gate === GATE.DENIED) {
+      this.renderAccessDenied();
+      return;
+    }
+    if (this.gate === GATE.RESUBMIT_CHOICE) {
+      this.renderResubmitChoice();
+      return;
+    }
+
     this.updateVisibleSections();
     if (this.currentPage === 0) {
       this.renderIntro();
@@ -85,19 +118,268 @@ export class SurveyEngine {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
-  renderIntro() {
+  // ── Loading ──
+  renderLoading() {
+    this.container.innerHTML = `
+      <div class="survey-container">
+        <div class="completion" style="padding:160px 20px">
+          <div class="spinner"></div>
+          <style>@keyframes spin{to{transform:rotate(360deg)}}.spinner{width:40px;height:40px;border:3px solid #e0e0e0;border-top:3px solid #2c2c2c;border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 24px}</style>
+          <p style="color:var(--c-text-secondary)">설문 링크를 확인 중입니다…</p>
+        </div>
+      </div>
+    `;
+  }
+
+  // ── Access Denied ──
+  renderAccessDenied() {
     const m = SURVEY_META;
     this.container.innerHTML = `
+      <div class="survey-container">
+        <div class="access-denied">
+          <div class="access-denied-icon">
+            <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" stroke-width="1.6">
+              <circle cx="12" cy="12" r="9"></circle>
+              <line x1="5.6" y1="5.6" x2="18.4" y2="18.4"></line>
+            </svg>
+          </div>
+          <h1>접근 권한이 없습니다</h1>
+          <p class="access-denied-msg">
+            본 설문은 사전에 발송된 개별 링크를 통해서만 참여할 수 있습니다.<br/>
+            이메일로 수신한 링크를 다시 확인하시거나, 아래 연락처로 문의해 주십시오.
+          </p>
+          <div class="access-denied-meta">
+            <dl>
+              <dt>조사기관</dt><dd>${m.institution}</dd>
+              <dt>연구책임</dt><dd>${m.researcher}</dd>
+              <dt>문의</dt><dd>${m.contact}</dd>
+            </dl>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // ── Resubmit Choice (이미 제출한 토큰 재접근) ──
+  renderResubmitChoice() {
+    const p = this.participant || {};
+    const submittedStr = this.submittedAt ? this.formatDateTime(this.submittedAt) : '';
+    const updatedStr = this.updatedAt ? this.formatDateTime(this.updatedAt) : '';
+
+    this.container.innerHTML = `
+      <div class="survey-container">
+        <div class="resubmit-choice">
+          <div class="resubmit-badge">제출 완료</div>
+          <h1>이미 응답을 제출하셨습니다</h1>
+          <div class="resubmit-meta">
+            <dl>
+              <dt>응답자</dt><dd>${this.escape(p.name || '-')}${p.org ? ` · ${this.escape(p.org)}` : ''}</dd>
+              <dt>최초 제출</dt><dd>${submittedStr || '-'}</dd>
+              ${updatedStr ? `<dt>최근 수정</dt><dd>${updatedStr}</dd>` : ''}
+            </dl>
+          </div>
+          <p class="resubmit-msg">
+            응답 내용을 <strong>수정</strong>하시거나, 제출한 응답을 <strong>확인</strong>만 하실 수 있습니다.
+          </p>
+          <div class="resubmit-actions">
+            <button class="btn btn-next" id="btn-edit-mode">응답 수정하기</button>
+            <button class="btn btn-prev" id="btn-view-mode">내 응답 확인 (읽기전용)</button>
+          </div>
+        </div>
+      </div>
+    `;
+    this.container.querySelector('#btn-edit-mode').addEventListener('click', () => {
+      this.editMode = EDIT_MODE.EDIT;
+      this.gate = GATE.OPEN;
+      this.currentPage = 0;
+      this.render();
+    });
+    this.container.querySelector('#btn-view-mode').addEventListener('click', () => {
+      this.gate = GATE.READ_ONLY;
+      this.render();
+    });
+  }
+
+  // ── Status Bar (공통 상단) ──
+  renderStatusBar() {
+    let status, statusClass;
+    if (this.submitted && this.editMode === EDIT_MODE.EDIT) {
+      status = '수정 중';
+      statusClass = 'status-editing';
+    } else if (this.submitted) {
+      status = '제출 완료';
+      statusClass = 'status-done';
+    } else {
+      status = '미제출';
+      statusClass = 'status-pending';
+    }
+
+    const submittedInfo = this.submittedAt
+      ? `<span class="status-time">제출: ${this.formatDateTime(this.submittedAt)}</span>`
+      : '';
+    const updatedInfo = this.updatedAt
+      ? `<span class="status-time">수정: ${this.formatDateTime(this.updatedAt)}</span>`
+      : '';
+
+    return `
+      <div class="status-info-bar">
+        <div class="status-info-inner">
+          <span class="status-badge ${statusClass}">${status}</span>
+          <div class="status-times">
+            ${submittedInfo}
+            ${updatedInfo}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // ── Participant Info Card ──
+  renderParticipantCard() {
+    const p = this.participant;
+    if (!p) return '';
+
+    if (this.editingParticipant) {
+      const errHtml = this.participantFormError
+        ? `<p class="participant-error">${this.escape(this.participantFormError)}</p>`
+        : '';
+      return `
+        <div class="participant-card editing">
+          <div class="participant-card-header">
+            <h3>내 정보 수정</h3>
+          </div>
+          <div class="participant-form">
+            <label>
+              <span>이름</span>
+              <input type="text" id="p-name" value="${this.escape(p.name || '')}" />
+            </label>
+            <label>
+              <span>이메일</span>
+              <input type="email" id="p-email" value="${this.escape(p.email || '')}" />
+            </label>
+            <label>
+              <span>소속</span>
+              <input type="text" id="p-org" value="${this.escape(p.org || '')}" />
+            </label>
+            <label>
+              <span>연락처</span>
+              <input type="tel" id="p-phone" value="${this.escape(p.phone || '')}" placeholder="010-0000-0000" />
+            </label>
+          </div>
+          ${errHtml}
+          <div class="participant-actions">
+            <button class="btn btn-prev" id="btn-p-cancel">취소</button>
+            <button class="btn btn-next" id="btn-p-save">저장</button>
+          </div>
+        </div>
+      `;
+    }
+
+    return `
+      <div class="participant-card">
+        <div class="participant-card-header">
+          <h3>내 정보</h3>
+          <button class="btn-link" id="btn-p-edit">수정</button>
+        </div>
+        <dl class="participant-info">
+          <dt>이름</dt><dd>${this.escape(p.name || '-')}</dd>
+          <dt>이메일</dt><dd>${this.escape(p.email || '-')}</dd>
+          <dt>소속</dt><dd>${this.escape(p.org || '-')}</dd>
+          <dt>연락처</dt><dd>${this.escape(p.phone || '-')}</dd>
+          <dt>직군</dt><dd class="readonly">${this.escape(p.category || '-')} <span class="hint">(사전 분류)</span></dd>
+        </dl>
+      </div>
+    `;
+  }
+
+  bindParticipantEvents() {
+    this.container.querySelector('#btn-p-edit')?.addEventListener('click', () => {
+      this.editingParticipant = true;
+      this.participantFormError = '';
+      this.render();
+    });
+    this.container.querySelector('#btn-p-cancel')?.addEventListener('click', () => {
+      this.editingParticipant = false;
+      this.participantFormError = '';
+      this.render();
+    });
+    this.container.querySelector('#btn-p-save')?.addEventListener('click', () => {
+      this.saveParticipant();
+    });
+  }
+
+  async saveParticipant() {
+    const nameEl = this.container.querySelector('#p-name');
+    const emailEl = this.container.querySelector('#p-email');
+    const orgEl = this.container.querySelector('#p-org');
+    const phoneEl = this.container.querySelector('#p-phone');
+
+    const payload = {
+      name: nameEl.value.trim(),
+      email: emailEl.value.trim(),
+      org: orgEl.value.trim(),
+      phone: phoneEl.value.trim(),
+    };
+
+    if (!payload.name) {
+      this.participantFormError = '이름을 입력해 주십시오.';
+      this.render();
+      return;
+    }
+    if (!payload.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email)) {
+      this.participantFormError = '올바른 이메일을 입력해 주십시오.';
+      this.render();
+      return;
+    }
+
+    const saveBtn = this.container.querySelector('#btn-p-save');
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '저장 중…'; }
+
+    try {
+      const res = await fetch(`${API_BASE}/api/survey/${this.token}/participant`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `저장 실패 (${res.status})`);
+      }
+      const data = await res.json();
+      this.participant = { ...this.participant, ...data.participant };
+      this.editingParticipant = false;
+      this.participantFormError = '';
+      this.render();
+    } catch (err) {
+      this.participantFormError = err.message || '저장 중 오류가 발생했습니다.';
+      if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '저장'; }
+      this.render();
+    }
+  }
+
+  // ── Intro ──
+  renderIntro() {
+    const m = SURVEY_META;
+    const statusBar = this.renderStatusBar();
+    const participantCard = this.renderParticipantCard();
+    const startLabel = this.submitted && this.editMode === EDIT_MODE.EDIT
+      ? '응답 수정 시작하기'
+      : '설문 시작하기';
+
+    this.container.innerHTML = `
+      ${statusBar}
       <div class="progress-bar-wrap"><div class="progress-bar-inner">
         <div class="progress-track"><div class="progress-fill" style="width:0%"></div></div>
         <span class="progress-label">0%</span>
       </div></div>
-      <div class="survey-container">
+      <div class="survey-container with-status-bar">
         <div class="survey-header">
           <div class="institution">${m.institution}</div>
           <h1>${m.title}</h1>
           <div class="subtitle">${m.subtitle}</div>
         </div>
+
+        ${participantCard}
 
         <div class="intro-card">
           <h2>연구 소개</h2>
@@ -119,25 +401,30 @@ export class SurveyEngine {
           </dl>
         </div>
 
-        <button class="btn-start" id="btn-start">설문 시작하기</button>
+        <button class="btn-start" id="btn-start">${startLabel}</button>
       </div>
     `;
-    this.container.querySelector('#btn-start').addEventListener('click', () => {
+    this.bindParticipantEvents();
+    this.container.querySelector('#btn-start')?.addEventListener('click', () => {
       this.currentPage = 1;
       this.render();
     });
   }
 
+  // ── Section ──
   renderSection(section) {
     const pct = Math.round((this.currentPage / (this.visibleSections.length + 1)) * 100);
     const isLast = this.currentPage === this.visibleSections.length;
+    const statusBar = this.renderStatusBar();
+    const submitLabel = this.submitted && this.editMode === EDIT_MODE.EDIT ? '수정 내용 제출' : '제출하기';
 
     let html = `
+      ${statusBar}
       <div class="progress-bar-wrap"><div class="progress-bar-inner">
         <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
         <span class="progress-label">${pct}%</span>
       </div></div>
-      <div class="survey-container">
+      <div class="survey-container with-status-bar">
         <div class="section">
           <div class="section-header">
             <span class="section-tag">${section.tag}</span>
@@ -155,7 +442,7 @@ export class SurveyEngine {
       <div class="nav-bar"><div class="nav-inner">
         <button class="btn btn-prev" id="btn-prev">&larr; 이전</button>
         ${isLast
-          ? '<button class="btn btn-submit" id="btn-next">제출하기</button>'
+          ? `<button class="btn btn-submit" id="btn-next">${submitLabel}</button>`
           : '<button class="btn btn-next" id="btn-next">다음 &rarr;</button>'
         }
       </div></div>
@@ -176,20 +463,14 @@ export class SurveyEngine {
 
     switch (q.type) {
       case Q_TYPE.SINGLE:
-        inner = this.renderOptions(q, 'radio');
-        break;
       case Q_TYPE.SINGLE_WITH_OTHER:
-        inner = this.renderOptions(q, 'radio', true);
+        inner = this.renderOptions(q, 'radio', q.type === Q_TYPE.SINGLE_WITH_OTHER);
         break;
       case Q_TYPE.MULTI:
-        inner = this.renderOptions(q, 'checkbox');
-        break;
-      case Q_TYPE.MULTI_WITH_OTHER:
-        inner = this.renderOptions(q, 'checkbox', true);
-        break;
       case Q_TYPE.MULTI_LIMIT:
         inner = this.renderOptions(q, 'checkbox');
         break;
+      case Q_TYPE.MULTI_WITH_OTHER:
       case Q_TYPE.MULTI_LIMIT_OTHER:
         inner = this.renderOptions(q, 'checkbox', true);
         break;
@@ -258,7 +539,6 @@ export class SurveyEngine {
   renderTextInput(q) {
     const isIdCode = q.id === 'ID_CODE';
     const cls = isIdCode ? 'text-input id-code-input' : 'text-input';
-    const tag = isIdCode ? 'input' : 'textarea';
     if (isIdCode) {
       return `<input type="text" class="${cls}" data-qid="${q.id}" placeholder="${q.placeholder || ''}" maxlength="10" />`;
     }
@@ -299,14 +579,12 @@ export class SurveyEngine {
 
   // ── Event Binding ──
   bindEvents(section) {
-    // Previous
     this.container.querySelector('#btn-prev')?.addEventListener('click', () => {
       this.currentPage--;
       if (this.currentPage < 0) this.currentPage = 0;
       this.render();
     });
 
-    // Next / Submit
     this.container.querySelector('#btn-next')?.addEventListener('click', () => {
       if (this.validateSection(section)) {
         this.currentPage++;
@@ -315,7 +593,6 @@ export class SurveyEngine {
       }
     });
 
-    // Option clicks
     this.container.querySelectorAll('.option-list').forEach(list => {
       const qid = list.dataset.qid;
       const type = list.dataset.type;
@@ -338,7 +615,6 @@ export class SurveyEngine {
             this.collectMultiResponse(qid, list, q);
           }
 
-          // Handle exclusive options
           if (q && q.exclusive !== undefined && input.checked) {
             const idx = parseInt(item.dataset.index);
             if (idx === q.exclusive) {
@@ -358,22 +634,19 @@ export class SurveyEngine {
             this.collectMultiResponse(qid, list, q);
           }
 
-          // Handle max selection
-          if (q && (q.maxSelect)) {
+          if (q && q.maxSelect) {
             this.enforceMaxSelect(qid, list, q);
           }
 
-          // Clear error
           const block = item.closest('.question-block, .sub-question');
           if (block) block.classList.remove('has-error');
         });
       });
     });
 
-    // Likert radios
     this.container.querySelectorAll('.likert-radio').forEach(radio => {
       radio.addEventListener('change', () => {
-        const name = radio.name; // e.g. Q10_0
+        const name = radio.name;
         const [qid, rowStr] = name.split(/_(\d+)$/);
         const row = parseInt(rowStr);
         const val = parseInt(radio.value);
@@ -386,7 +659,6 @@ export class SurveyEngine {
       });
     });
 
-    // Text inputs
     this.container.querySelectorAll('.text-input').forEach(el => {
       const qid = el.dataset.qid;
       el.addEventListener('input', () => {
@@ -395,7 +667,6 @@ export class SurveyEngine {
       });
     });
 
-    // Other text inputs
     this.container.querySelectorAll('.other-text').forEach(el => {
       el.addEventListener('input', () => {
         const qid = el.dataset.qid;
@@ -405,7 +676,7 @@ export class SurveyEngine {
     });
   }
 
-  collectMultiResponse(qid, list, q) {
+  collectMultiResponse(qid, list) {
     const checked = [];
     list.querySelectorAll('input:checked').forEach(cb => {
       checked.push(cb.value === 'other' ? 'other' : parseInt(cb.value));
@@ -568,19 +839,44 @@ export class SurveyEngine {
     return null;
   }
 
+  escape(s) {
+    if (s == null) return '';
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  formatDateTime(isoStr) {
+    try {
+      const d = new Date(isoStr);
+      if (isNaN(d.getTime())) return isoStr;
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      const hh = String(d.getHours()).padStart(2, '0');
+      const mi = String(d.getMinutes()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+    } catch { return isoStr; }
+  }
+
   // ── Completion ──
   renderCompletion() {
-    if (this.token && !this.submitted) {
+    if (this.token && (!this.submitted || this.editMode === EDIT_MODE.EDIT)) {
       this.submitToServer();
       return;
     }
 
+    const statusBar = this.renderStatusBar();
     const alreadyMsg = this.submitted
-      ? '<p class="resubmit-note" style="margin-top:12px;font-size:13px;color:#888">이전 응답이 업데이트되었습니다.</p>'
+      ? '<p class="resubmit-note">이전 응답이 업데이트되었습니다.</p>'
       : '';
 
     this.container.innerHTML = `
-      <div class="survey-container">
+      ${statusBar}
+      <div class="survey-container with-status-bar">
         <div class="completion">
           <div class="completion-icon">
             <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>
@@ -599,8 +895,10 @@ export class SurveyEngine {
   }
 
   async submitToServer() {
+    const statusBar = this.renderStatusBar();
     this.container.innerHTML = `
-      <div class="survey-container">
+      ${statusBar}
+      <div class="survey-container with-status-bar">
         <div class="completion" style="padding:120px 20px">
           <div class="spinner" style="width:40px;height:40px;border:3px solid #e0e0e0;border-top:3px solid #2c2c2c;border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 24px"></div>
           <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
@@ -621,12 +919,19 @@ export class SurveyEngine {
       });
 
       if (!res.ok) throw new Error(`Server error: ${res.status}`);
+      const data = await res.json();
 
       this.submitted = true;
+      const now = new Date().toISOString();
+      if (data.status === 'created') this.submittedAt = now;
+      else this.updatedAt = now;
+      this.editMode = EDIT_MODE.NEW;
       this.renderCompletion();
     } catch (err) {
+      const statusBar = this.renderStatusBar();
       this.container.innerHTML = `
-        <div class="survey-container">
+        ${statusBar}
+        <div class="survey-container with-status-bar">
           <div class="completion">
             <h2 style="color:var(--c-error)">제출 중 오류가 발생했습니다</h2>
             <p style="margin:16px 0">${err.message}<br/>응답은 브라우저에 저장되어 있습니다. 다시 시도하거나 JSON을 다운로드해 주십시오.</p>

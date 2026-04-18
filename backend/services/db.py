@@ -19,6 +19,8 @@ async def connect():
     await _db.participants.create_index("token", unique=True)
     await _db.participants.create_index("email", unique=True)
     await _db.responses.create_index("token")
+    await _db.participants_backup.create_index("token")
+    await _db.participants_backup.create_index([("token", 1), ("version", -1)])
 
 
 async def disconnect():

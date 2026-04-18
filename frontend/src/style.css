@@ -709,6 +709,347 @@ body {
   }
 }
 
+/* ── Status Info Bar (상단 제출 상태) ── */
+.status-info-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 110;
+  background: var(--c-surface);
+  border-bottom: 1px solid var(--c-border-light);
+}
+
+.status-info-inner {
+  max-width: var(--max-w);
+  margin: 0 auto;
+  padding: 8px 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 20px;
+  letter-spacing: 0.02em;
+}
+
+.status-badge.status-pending {
+  background: #fff7e6;
+  color: #a8651a;
+  border: 1px solid #f4d9a9;
+}
+
+.status-badge.status-done {
+  background: #eaf7ef;
+  color: #1f7a3f;
+  border: 1px solid #b6debf;
+}
+
+.status-badge.status-editing {
+  background: #e8f1fc;
+  color: #1e5aa8;
+  border: 1px solid #b4ccec;
+}
+
+.status-times {
+  display: flex;
+  gap: 14px;
+  font-size: 11.5px;
+  color: var(--c-text-tertiary);
+  flex-wrap: wrap;
+}
+
+.status-time { white-space: nowrap; }
+
+/* Status bar shifts progress bar/container down */
+.status-info-bar + .progress-bar-wrap {
+  top: 36px;
+}
+
+.survey-container.with-status-bar {
+  padding-top: 96px;
+}
+
+/* ── Access Denied ── */
+.access-denied {
+  max-width: 520px;
+  margin: 80px auto 0;
+  text-align: center;
+  padding: 40px 24px;
+}
+
+.access-denied-icon {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: var(--c-error-bg);
+  color: var(--c-error);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 24px;
+}
+
+.access-denied h1 {
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 16px;
+}
+
+.access-denied-msg {
+  font-size: 14.5px;
+  color: var(--c-text-secondary);
+  line-height: 1.75;
+  margin-bottom: 32px;
+}
+
+.access-denied-meta {
+  border-top: 1px solid var(--c-border-light);
+  padding-top: 24px;
+  text-align: left;
+}
+
+.access-denied-meta dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 16px;
+  font-size: 13px;
+  max-width: 360px;
+  margin: 0 auto;
+}
+
+.access-denied-meta dt {
+  color: var(--c-text-tertiary);
+  font-weight: 500;
+}
+
+.access-denied-meta dd {
+  color: var(--c-text-secondary);
+}
+
+/* ── Resubmit Choice ── */
+.resubmit-choice {
+  max-width: 520px;
+  margin: 60px auto 0;
+  text-align: center;
+  padding: 40px 24px;
+}
+
+.resubmit-badge {
+  display: inline-block;
+  background: #eaf7ef;
+  color: #1f7a3f;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 14px;
+  border-radius: 20px;
+  border: 1px solid #b6debf;
+  margin-bottom: 18px;
+  letter-spacing: 0.02em;
+}
+
+.resubmit-choice h1 {
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 24px;
+}
+
+.resubmit-meta {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+  margin-bottom: 24px;
+  text-align: left;
+}
+
+.resubmit-meta dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 16px;
+  font-size: 13.5px;
+}
+
+.resubmit-meta dt {
+  color: var(--c-text-tertiary);
+  font-weight: 500;
+}
+
+.resubmit-meta dd {
+  color: var(--c-text);
+}
+
+.resubmit-msg {
+  font-size: 14px;
+  color: var(--c-text-secondary);
+  line-height: 1.7;
+  margin-bottom: 28px;
+}
+
+.resubmit-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 320px;
+  margin: 0 auto;
+}
+
+.resubmit-actions .btn {
+  width: 100%;
+  justify-content: center;
+  padding: 12px 20px;
+  font-size: 14px;
+}
+
+.resubmit-note {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--c-text-tertiary);
+}
+
+/* ── Participant Card ── */
+.participant-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  padding: 20px 24px;
+  margin-bottom: 28px;
+}
+
+.participant-card.editing {
+  border-color: var(--c-accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.participant-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.participant-card-header h3 {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--c-text);
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  color: var(--c-accent);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition);
+}
+
+.btn-link:hover {
+  background: var(--c-accent-light);
+}
+
+.participant-info {
+  display: grid;
+  grid-template-columns: 70px 1fr;
+  gap: 6px 16px;
+  font-size: 13.5px;
+}
+
+.participant-info dt {
+  color: var(--c-text-tertiary);
+  font-weight: 500;
+}
+
+.participant-info dd {
+  color: var(--c-text);
+  word-break: break-all;
+}
+
+.participant-info dd.readonly {
+  color: var(--c-text-secondary);
+}
+
+.participant-info dd .hint {
+  font-size: 11.5px;
+  color: var(--c-text-tertiary);
+  margin-left: 4px;
+}
+
+.participant-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.participant-form label {
+  display: grid;
+  grid-template-columns: 70px 1fr;
+  align-items: center;
+  gap: 12px;
+  font-size: 13.5px;
+}
+
+.participant-form label > span {
+  color: var(--c-text-tertiary);
+  font-weight: 500;
+}
+
+.participant-form input {
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color var(--transition);
+  background: #fff;
+}
+
+.participant-form input:focus {
+  border-color: var(--c-accent);
+}
+
+.participant-error {
+  color: var(--c-error);
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+
+.participant-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.participant-actions .btn {
+  padding: 8px 20px;
+  font-size: 13.5px;
+}
+
+@media (max-width: 600px) {
+  .participant-info,
+  .participant-form label {
+    grid-template-columns: 60px 1fr;
+  }
+  .status-info-bar + .progress-bar-wrap {
+    top: 34px;
+  }
+  .survey-container.with-status-bar {
+    padding-top: 80px;
+  }
+}
+
 /* ── Utility ── */
 .hidden {
   display: none !important;

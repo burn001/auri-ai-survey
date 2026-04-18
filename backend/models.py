@@ -22,6 +22,13 @@ class ParticipantOut(BaseModel):
     has_responded: bool = False
 
 
+class ParticipantUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    org: Optional[str] = None
+    phone: Optional[str] = None
+
+
 class ResponseSubmit(BaseModel):
     token: str
     survey_version: str = "v7"
