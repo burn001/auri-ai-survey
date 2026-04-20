@@ -23,8 +23,13 @@ function logout() {
   document.getElementById('login').style.display = 'flex';
 }
 
-// Auto-login
+// Auto-login — URL ?key=... (토큰 링크) 우선, 이후 sessionStorage 복원
 (function init() {
+  const urlKey = new URLSearchParams(location.search).get('key');
+  if (urlKey) {
+    sessionStorage.setItem('adminKey', urlKey);
+    history.replaceState(null, '', location.pathname + location.hash);
+  }
   const saved = sessionStorage.getItem('adminKey');
   if (saved) {
     ADMIN_KEY = saved;
