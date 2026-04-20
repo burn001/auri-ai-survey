@@ -124,9 +124,19 @@ async function loadParticipants(page = 0) {
   </table>`;
 
   const totalPages = Math.ceil(data.total / P_LIMIT);
-  document.getElementById('p-pagination').innerHTML = Array.from({ length: Math.min(totalPages, 10) }, (_, i) =>
-    `<button class="btn btn-sm ${i === page ? 'btn-primary' : 'btn-outline'}" onclick="loadParticipants(${i})">${i + 1}</button>`
-  ).join('');
+  const pag = [];
+  const btn = (i, label, disabled) => `<button class="btn btn-sm ${i === page ? 'btn-primary' : 'btn-outline'}"${disabled ? ' disabled' : ''} onclick="loadParticipants(${i})">${label}</button>`;
+  if (totalPages > 1) {
+    pag.push(btn(0, '«', page === 0));
+    pag.push(btn(Math.max(0, page - 1), '‹', page === 0));
+    const start = Math.max(0, Math.min(page - 4, totalPages - 9));
+    const end = Math.min(totalPages, start + 9);
+    for (let i = start; i < end; i++) pag.push(btn(i, i + 1, false));
+    pag.push(btn(Math.min(totalPages - 1, page + 1), '›', page >= totalPages - 1));
+    pag.push(btn(totalPages - 1, '»', page >= totalPages - 1));
+    pag.push(`<span style="font-size:12px;color:var(--text3);margin-left:8px;align-self:center">${data.total}명 / ${totalPages}페이지</span>`);
+  }
+  document.getElementById('p-pagination').innerHTML = pag.join('');
 }
 
 document.getElementById('p-category').addEventListener('change', () => loadParticipants(0));
@@ -227,6 +237,7 @@ async function sendEmails() {
   }
 }
 
+let _previewBlobUrl = null;
 async function previewEmail() {
   const preview = document.getElementById('email-preview');
   try {
@@ -234,11 +245,14 @@ async function previewEmail() {
       method: 'POST',
       headers: { 'X-Admin-Key': ADMIN_KEY, 'Content-Type': 'application/json' },
     });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
     const html = await res.text();
+    if (_previewBlobUrl) URL.revokeObjectURL(_previewBlobUrl);
+    _previewBlobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
     preview.style.display = 'block';
-    preview.innerHTML = `<iframe srcdoc="${html.replace(/"/g, '&quot;')}"></iframe>`;
+    preview.innerHTML = `<iframe src="${_previewBlobUrl}"></iframe>`;
   } catch (e) {
-    toast('미리보기 실패', 'error');
+    toast('미리보기 실패: ' + e.message, 'error');
   }
 }
 

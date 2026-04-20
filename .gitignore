@@ -1,4 +1,4 @@
-node_modules/
+﻿node_modules/
 frontend/dist/
 backend/__pycache__/
 backend/*.pyc
@@ -7,3 +7,4 @@ backend/logs/
 .venv/
 venv/
 __pycache__/
+backend/.env.*
