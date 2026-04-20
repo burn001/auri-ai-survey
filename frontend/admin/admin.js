@@ -108,17 +108,31 @@ const P_LIMIT = 50;
 async function loadParticipants(page = 0) {
   pPage = page;
   const cat = document.getElementById('p-category').value;
-  const q = `?skip=${page * P_LIMIT}&limit=${P_LIMIT}` + (cat ? `&category=${cat}` : '');
+  const search = document.getElementById('p-search').value.trim().toLowerCase();
+
+  // 검색 모드는 전체 받아서 클라이언트 필터, 아니면 서버 페이지네이션
+  const q = search
+    ? `?skip=0&limit=5000` + (cat ? `&category=${cat}` : '')
+    : `?skip=${page * P_LIMIT}&limit=${P_LIMIT}` + (cat ? `&category=${cat}` : '');
   const data = await api('/api/admin/participants' + q);
 
-  const search = document.getElementById('p-search').value.toLowerCase();
-  const filtered = search
-    ? data.data.filter(p => p.name.toLowerCase().includes(search) || (p.org || '').toLowerCase().includes(search))
-    : data.data;
+  let rows, total;
+  if (search) {
+    const matched = data.data.filter(p =>
+      (p.name || '').toLowerCase().includes(search) ||
+      (p.org || '').toLowerCase().includes(search) ||
+      (p.email || '').toLowerCase().includes(search)
+    );
+    total = matched.length;
+    rows = matched.slice(page * P_LIMIT, (page + 1) * P_LIMIT);
+  } else {
+    total = data.total;
+    rows = data.data;
+  }
 
   document.getElementById('p-table').innerHTML = `<table>
     <thead><tr><th>이름</th><th>소속</th><th>직군</th><th>이메일</th><th>발송</th><th>토큰</th></tr></thead>
-    <tbody>${filtered.map(p => `<tr>
+    <tbody>${rows.map(p => `<tr>
       <td>${p.name}</td>
       <td>${p.org || ''}</td>
       <td><span class="badge badge-blue">${p.category || ''}</span></td>
@@ -128,7 +142,7 @@ async function loadParticipants(page = 0) {
     </tr>`).join('')}</tbody>
   </table>`;
 
-  const totalPages = Math.ceil(data.total / P_LIMIT);
+  const totalPages = Math.ceil(total / P_LIMIT);
   const pag = [];
   const btn = (i, label, disabled) => `<button class="btn btn-sm ${i === page ? 'btn-primary' : 'btn-outline'}"${disabled ? ' disabled' : ''} onclick="loadParticipants(${i})">${label}</button>`;
   if (totalPages > 1) {
@@ -139,13 +153,14 @@ async function loadParticipants(page = 0) {
     for (let i = start; i < end; i++) pag.push(btn(i, i + 1, false));
     pag.push(btn(Math.min(totalPages - 1, page + 1), '›', page >= totalPages - 1));
     pag.push(btn(totalPages - 1, '»', page >= totalPages - 1));
-    pag.push(`<span style="font-size:12px;color:var(--text3);margin-left:8px;align-self:center">${data.total}명 / ${totalPages}페이지</span>`);
   }
+  const label = search ? `검색 "${search}" 결과 ${total}명` : `${total}명`;
+  pag.push(`<span style="font-size:12px;color:var(--text3);margin-left:8px;align-self:center">${label}${totalPages > 1 ? ` / ${totalPages}페이지` : ''}</span>`);
   document.getElementById('p-pagination').innerHTML = pag.join('');
 }
 
 document.getElementById('p-category').addEventListener('change', () => loadParticipants(0));
-document.getElementById('p-search').addEventListener('input', () => loadParticipants(pPage));
+document.getElementById('p-search').addEventListener('input', () => loadParticipants(0));
 
 function exportParticipantLinks() {
   const rows = [['name', 'email', 'org', 'category', 'token', 'survey_link']];
