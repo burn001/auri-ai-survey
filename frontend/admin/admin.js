@@ -9,7 +9,7 @@ async function doLogin() {
   if (!input) return;
   ADMIN_TOKEN = input;
   try {
-    const who = await api('/api/admin/me');
+    const who = await api('/ai/api/admin/me');
     ADMIN_PROFILE = who;
     sessionStorage.setItem('adminToken', ADMIN_TOKEN);
     document.getElementById('login').style.display = 'none';
@@ -95,7 +95,7 @@ const CAT_COLORS = {
 const CAT_ORDER = ['설계', '시공', '유지관리', '건축행정', '연구진', '기타', '미분류'];
 
 async function loadDashboard() {
-  const data = await api('/api/admin/stats');
+  const data = await api('/ai/api/admin/stats');
   const cats = data.by_category;
 
   document.getElementById('stat-cards').innerHTML = `
@@ -151,7 +151,7 @@ async function loadParticipants(page = 0) {
   pPage = page;
   const cat = document.getElementById('p-category').value;
   const q = `?skip=0&limit=5000` + (cat ? `&category=${encodeURIComponent(cat)}` : '');
-  const data = await api('/api/admin/participants' + q);
+  const data = await api('/ai/api/admin/participants' + q);
   pCache = data.data;
   pSelected.clear();
   renderParticipants();
@@ -309,7 +309,7 @@ async function runSend(tokens, type = 'invite') {
   btn.disabled = true;
   btn.textContent = `발송 중 (${tokens.length})...`;
   try {
-    const result = await api('/api/admin/email/send', {
+    const result = await api('/ai/api/admin/email/send', {
       method: 'POST',
       body: JSON.stringify({ tokens, type }),
     });
@@ -323,7 +323,7 @@ async function runSend(tokens, type = 'invite') {
 // ── Email Log Modal ──
 async function showEmailLogs(token, name) {
   try {
-    const data = await api(`/api/admin/email/logs?token=${encodeURIComponent(token)}&limit=100`);
+    const data = await api(`/ai/api/admin/email/logs?token=${encodeURIComponent(token)}&limit=100`);
     const logs = data.data || [];
     const typeLabels = { invite: '초대', reminder: '추가요청', deadline: '마감알림', custom: '사용자' };
 
@@ -381,7 +381,7 @@ function exportParticipantLinks() {
 let _previewBlobUrl = null;
 async function previewEmail() {
   try {
-    const res = await fetch(API + '/api/admin/email/preview', {
+    const res = await fetch(API + '/ai/api/admin/email/preview', {
       method: 'POST',
       headers: { 'X-Admin-Token': ADMIN_TOKEN, 'Content-Type': 'application/json' },
     });
@@ -413,7 +413,7 @@ let rCache = [];
 async function loadResponses() {
   const cat = document.getElementById('r-category').value;
   const q = `?skip=0&limit=200` + (cat ? `&category=${cat}` : '');
-  const data = await api('/api/admin/responses' + q);
+  const data = await api('/ai/api/admin/responses' + q);
   rCache = data.data;
 
   document.getElementById('r-table').innerHTML = `<table>
@@ -452,7 +452,7 @@ let THREAD_EDIT_DRAFTS = {};
 
 async function fetchThreads() {
   try {
-    const data = await api('/api/admin/threads');
+    const data = await api('/ai/api/admin/threads');
     THREADS_CACHE = data.threads || {};
   } catch (e) {
     console.warn('threads load failed', e);
@@ -603,14 +603,14 @@ function renderCommentNodeAdmin(qid, c, depth) {
 
 async function adminPostComment(qid, text, parentId) {
   const body = parentId ? { text, parent_id: parentId } : { text };
-  const res = await api(`/api/admin/threads/${qid}`, { method: 'POST', body: JSON.stringify(body) });
+  const res = await api(`/ai/api/admin/threads/${qid}`, { method: 'POST', body: JSON.stringify(body) });
   if (!THREADS_CACHE[qid]) THREADS_CACHE[qid] = [];
   THREADS_CACHE[qid].push(res.comment);
   return res.comment;
 }
 
 async function adminUpdateComment(qid, cid, payload) {
-  const res = await api(`/api/admin/threads/${qid}/${cid}`, { method: 'PATCH', body: JSON.stringify(payload) });
+  const res = await api(`/ai/api/admin/threads/${qid}/${cid}`, { method: 'PATCH', body: JSON.stringify(payload) });
   const list = THREADS_CACHE[qid] || [];
   const idx = list.findIndex(c => c.id === cid);
   if (idx >= 0) list[idx] = res.comment;
@@ -618,7 +618,7 @@ async function adminUpdateComment(qid, cid, payload) {
 }
 
 async function adminDeleteComment(qid, cid) {
-  const res = await api(`/api/admin/threads/${qid}/${cid}`, { method: 'DELETE' });
+  const res = await api(`/ai/api/admin/threads/${qid}/${cid}`, { method: 'DELETE' });
   if (res.status === 'deleted') {
     THREADS_CACHE[qid] = (THREADS_CACHE[qid] || []).filter(c => c.id !== cid);
   } else {
@@ -878,7 +878,7 @@ function closeRespModal(e) {
 
 async function downloadCSV() {
   try {
-    const res = await fetch(API + '/api/admin/export', {
+    const res = await fetch(API + '/ai/api/admin/export', {
       headers: { 'X-Admin-Token': ADMIN_TOKEN },
     });
     if (!res.ok) throw new Error('No data');

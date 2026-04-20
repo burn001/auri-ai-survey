@@ -62,7 +62,7 @@ export class SurveyEngine {
 
   async verifyToken() {
     try {
-      const res = await fetch(`${API_BASE}/api/survey/${this.token}`);
+      const res = await fetch(`${API_BASE}/ai/api/survey/${this.token}`);
       if (!res.ok) {
         this.gate = GATE.DENIED;
         return;
@@ -112,7 +112,7 @@ export class SurveyEngine {
     if (!this.isReviewer() || !this.token) return;
     this.threadsLoading = true;
     try {
-      const res = await fetch(`${API_BASE}/api/survey/${this.token}/threads`);
+      const res = await fetch(`${API_BASE}/ai/api/survey/${this.token}/threads`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       this.threads = data.threads || {};
@@ -257,7 +257,7 @@ export class SurveyEngine {
       return;
     }
     try {
-      const res = await fetch(`${API_BASE}/api/survey/${this.token}/threads/${qid}`, {
+      const res = await fetch(`${API_BASE}/ai/api/survey/${this.token}/threads/${qid}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
@@ -280,7 +280,7 @@ export class SurveyEngine {
     const text = (this.threadReplyDrafts[parentId] || '').trim();
     if (!text) { alert('답글 내용을 입력해 주세요.'); return; }
     try {
-      const res = await fetch(`${API_BASE}/api/survey/${this.token}/threads/${qid}`, {
+      const res = await fetch(`${API_BASE}/ai/api/survey/${this.token}/threads/${qid}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, parent_id: parentId }),
@@ -304,7 +304,7 @@ export class SurveyEngine {
     const text = (this.threadEditDrafts[commentId] || '').trim();
     if (!text) { alert('내용을 입력해 주세요.'); return; }
     try {
-      const res = await fetch(`${API_BASE}/api/survey/${this.token}/threads/${qid}/${commentId}`, {
+      const res = await fetch(`${API_BASE}/ai/api/survey/${this.token}/threads/${qid}/${commentId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
@@ -328,7 +328,7 @@ export class SurveyEngine {
   async deleteComment(commentId, qid) {
     if (!confirm('이 코멘트를 삭제하시겠습니까?')) return;
     try {
-      const res = await fetch(`${API_BASE}/api/survey/${this.token}/threads/${qid}/${commentId}`, {
+      const res = await fetch(`${API_BASE}/ai/api/survey/${this.token}/threads/${qid}/${commentId}`, {
         method: 'DELETE',
       });
       if (!res.ok) {
@@ -728,7 +728,7 @@ export class SurveyEngine {
     if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '저장 중…'; }
 
     try {
-      const res = await fetch(`${API_BASE}/api/survey/${this.token}/participant`, {
+      const res = await fetch(`${API_BASE}/ai/api/survey/${this.token}/participant`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -1339,7 +1339,7 @@ export class SurveyEngine {
     `;
 
     try {
-      const res = await fetch(`${API_BASE}/api/responses`, {
+      const res = await fetch(`${API_BASE}/ai/api/responses`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
