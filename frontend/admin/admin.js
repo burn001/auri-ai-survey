@@ -51,7 +51,6 @@ document.querySelectorAll('.nav-item[data-page]').forEach(el => {
     document.getElementById('page-' + page).classList.add('active');
     if (page === 'dashboard') loadDashboard();
     if (page === 'participants') loadParticipants();
-    if (page === 'email') loadEmailTargets();
     if (page === 'responses') loadResponses();
   });
 });
@@ -101,165 +100,190 @@ async function loadDashboard() {
     }).join('');
 }
 
-// ── Participants ──
+// ── Participants & Email (통합) ──
 let pPage = 0;
 const P_LIMIT = 50;
+let pCache = [];                   // 현재 직군 필터 기준 전체 참가자
+let pSelected = new Set();         // 선택된 토큰
+let pFilteredView = [];            // 검색·상태 필터 적용된 뷰 (페이지네이션 대상)
+
+// 한국 시간 포맷: "2026-04-20 12:34"
+function fmtKST(iso) {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(d).replace(', ', ' ');
+}
+
+// 경과 시간: "3일 전", "5시간 전", "방금 전"
+function relTime(iso) {
+  if (!iso) return '';
+  const diff = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return '방금 전';
+  if (m < 60) return `${m}분 전`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}시간 전`;
+  const d = Math.floor(h / 24);
+  if (d < 30) return `${d}일 전`;
+  const mo = Math.floor(d / 30);
+  return `${mo}개월 전`;
+}
 
 async function loadParticipants(page = 0) {
   pPage = page;
   const cat = document.getElementById('p-category').value;
-  const search = document.getElementById('p-search').value.trim().toLowerCase();
-
-  // 검색 모드는 전체 받아서 클라이언트 필터, 아니면 서버 페이지네이션
-  const q = search
-    ? `?skip=0&limit=5000` + (cat ? `&category=${cat}` : '')
-    : `?skip=${page * P_LIMIT}&limit=${P_LIMIT}` + (cat ? `&category=${cat}` : '');
+  const q = `?skip=0&limit=5000` + (cat ? `&category=${encodeURIComponent(cat)}` : '');
   const data = await api('/api/admin/participants' + q);
+  pCache = data.data;
+  pSelected.clear();
+  renderParticipants();
+}
 
-  let rows, total;
-  if (search) {
-    const matched = data.data.filter(p =>
+function renderParticipants() {
+  const page = pPage;
+  const search = document.getElementById('p-search').value.trim().toLowerCase();
+  const sendStatus = document.getElementById('p-send-status').value;
+  const respStatus = document.getElementById('p-resp-status').value;
+
+  pFilteredView = pCache.filter(p => {
+    if (search && !(
       (p.name || '').toLowerCase().includes(search) ||
       (p.org || '').toLowerCase().includes(search) ||
       (p.email || '').toLowerCase().includes(search)
-    );
-    total = matched.length;
-    rows = matched.slice(page * P_LIMIT, (page + 1) * P_LIMIT);
-  } else {
-    total = data.total;
-    rows = data.data;
-  }
+    )) return false;
+    if (sendStatus === 'unsent' && p.email_sent) return false;
+    if (sendStatus === 'sent' && !p.email_sent) return false;
+    if (respStatus === 'responded' && !p.responded) return false;
+    if (respStatus === 'unresponded' && p.responded) return false;
+    return true;
+  });
+
+  const total = pFilteredView.length;
+  const totalPages = Math.max(1, Math.ceil(total / P_LIMIT));
+  if (page >= totalPages) { pPage = 0; }
+  const rows = pFilteredView.slice(pPage * P_LIMIT, (pPage + 1) * P_LIMIT);
+
+  const pageTokens = rows.map(r => r.token);
+  const allChecked = rows.length > 0 && pageTokens.every(t => pSelected.has(t));
 
   document.getElementById('p-table').innerHTML = `<table>
-    <thead><tr><th>이름</th><th>소속</th><th>직군</th><th>이메일</th><th>발송</th><th>토큰</th></tr></thead>
-    <tbody>${rows.map(p => `<tr>
-      <td>${p.name}</td>
-      <td>${p.org || ''}</td>
-      <td><span class="badge badge-blue">${p.category || ''}</span></td>
-      <td style="font-size:12px">${p.email}</td>
-      <td>${p.email_sent ? '<span class="badge badge-green">완료</span>' : '<span class="badge badge-gray">미발송</span>'}</td>
-      <td><code style="font-size:11px;cursor:pointer" onclick="navigator.clipboard.writeText('${p.token}');toast('복사됨')">${p.token}</code></td>
-    </tr>`).join('')}</tbody>
+    <thead><tr>
+      <th class="checkbox-col"><input type="checkbox" ${allChecked ? 'checked' : ''} onchange="togglePageSelect(this.checked)"></th>
+      <th>이름</th><th>소속</th><th>직군</th><th>이메일</th>
+      <th>발송</th><th>응답</th><th>토큰</th>
+    </tr></thead>
+    <tbody>${rows.map(p => {
+      const sentTime = p.email_sent_at ? `${fmtKST(p.email_sent_at)}<br><span style="color:var(--text3);font-size:11px">${relTime(p.email_sent_at)}</span>` : '';
+      const sendBadge = p.email_sent
+        ? `<span class="badge badge-green">발송</span><div style="font-size:11px;color:var(--text3);margin-top:2px">${sentTime}</div>`
+        : '<span class="badge badge-gray">미발송</span>';
+      const respBadge = p.responded
+        ? `<span class="badge badge-blue">응답</span><div style="font-size:11px;color:var(--text3);margin-top:2px">${fmtKST(p.response_submitted_at)}</div>`
+        : (p.email_sent ? '<span class="badge badge-orange">미응답</span>' : '<span class="badge badge-gray">-</span>');
+      return `<tr>
+        <td class="checkbox-col"><input type="checkbox" ${pSelected.has(p.token) ? 'checked' : ''} onchange="toggleRowSelect('${p.token}', this.checked)"></td>
+        <td>${p.name}</td>
+        <td>${p.org || ''}</td>
+        <td><span class="badge badge-blue">${p.category || ''}</span></td>
+        <td style="font-size:12px">${p.email}</td>
+        <td style="min-width:170px">${sendBadge}</td>
+        <td style="min-width:150px">${respBadge}</td>
+        <td><code style="font-size:11px;cursor:pointer" onclick="navigator.clipboard.writeText('${p.token}');toast('복사됨')">${p.token}</code></td>
+      </tr>`;
+    }).join('')}</tbody>
   </table>`;
 
-  const totalPages = Math.ceil(total / P_LIMIT);
+  // 페이지네이션
   const pag = [];
-  const btn = (i, label, disabled) => `<button class="btn btn-sm ${i === page ? 'btn-primary' : 'btn-outline'}"${disabled ? ' disabled' : ''} onclick="loadParticipants(${i})">${label}</button>`;
+  const btn = (i, label, disabled) => `<button class="btn btn-sm ${i === pPage ? 'btn-primary' : 'btn-outline'}"${disabled ? ' disabled' : ''} onclick="gotoPage(${i})">${label}</button>`;
   if (totalPages > 1) {
-    pag.push(btn(0, '«', page === 0));
-    pag.push(btn(Math.max(0, page - 1), '‹', page === 0));
-    const start = Math.max(0, Math.min(page - 4, totalPages - 9));
+    pag.push(btn(0, '«', pPage === 0));
+    pag.push(btn(Math.max(0, pPage - 1), '‹', pPage === 0));
+    const start = Math.max(0, Math.min(pPage - 4, totalPages - 9));
     const end = Math.min(totalPages, start + 9);
     for (let i = start; i < end; i++) pag.push(btn(i, i + 1, false));
-    pag.push(btn(Math.min(totalPages - 1, page + 1), '›', page >= totalPages - 1));
-    pag.push(btn(totalPages - 1, '»', page >= totalPages - 1));
+    pag.push(btn(Math.min(totalPages - 1, pPage + 1), '›', pPage >= totalPages - 1));
+    pag.push(btn(totalPages - 1, '»', pPage >= totalPages - 1));
   }
-  const label = search ? `검색 "${search}" 결과 ${total}명` : `${total}명`;
-  pag.push(`<span style="font-size:12px;color:var(--text3);margin-left:8px;align-self:center">${label}${totalPages > 1 ? ` / ${totalPages}페이지` : ''}</span>`);
+  pag.push(`<span style="font-size:12px;color:var(--text3);margin-left:8px;align-self:center">${total}명${totalPages > 1 ? ` / ${totalPages}페이지` : ''} · 선택 ${pSelected.size}</span>`);
   document.getElementById('p-pagination').innerHTML = pag.join('');
+
+  // 선택 발송 버튼
+  const sendBtn = document.getElementById('btn-send');
+  sendBtn.disabled = pSelected.size === 0;
+  sendBtn.textContent = `선택 발송 (${pSelected.size})`;
+}
+
+function gotoPage(i) { pPage = i; renderParticipants(); }
+
+function togglePageSelect(checked) {
+  const page = pFilteredView.slice(pPage * P_LIMIT, (pPage + 1) * P_LIMIT);
+  page.forEach(p => { checked ? pSelected.add(p.token) : pSelected.delete(p.token); });
+  renderParticipants();
+}
+
+function toggleRowSelect(token, checked) {
+  if (checked) pSelected.add(token); else pSelected.delete(token);
+  renderParticipants();
 }
 
 document.getElementById('p-category').addEventListener('change', () => loadParticipants(0));
-document.getElementById('p-search').addEventListener('input', () => loadParticipants(0));
+document.getElementById('p-search').addEventListener('input', () => { pPage = 0; renderParticipants(); });
+document.getElementById('p-send-status').addEventListener('change', () => { pPage = 0; renderParticipants(); });
+document.getElementById('p-resp-status').addEventListener('change', () => { pPage = 0; renderParticipants(); });
 
-function exportParticipantLinks() {
-  const rows = [['name', 'email', 'org', 'category', 'token', 'survey_link']];
-  const cat = document.getElementById('p-category').value;
-  const q = `?skip=0&limit=5000` + (cat ? `&category=${cat}` : '');
-  api('/api/admin/participants' + q).then(data => {
-    data.data.forEach(p => {
-      rows.push([p.name, p.email, p.org || '', p.category || '', p.token,
-        `https://burn001.github.io/auri-ai-survey/?token=${p.token}`]);
-    });
-    const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n');
-    const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'participants_links.csv';
-    a.click();
-  });
+async function sendSelected() {
+  if (pSelected.size === 0) return;
+  if (!confirm(`${pSelected.size}명에게 설문 이메일을 발송합니다. 계속할까요?`)) return;
+  await runSend([...pSelected]);
 }
 
-// ── Email ──
-let emailTargets = [];
-let selectedTokens = new Set();
-
-async function loadEmailTargets() {
-  const cat = document.getElementById('e-category').value;
-  const filter = document.getElementById('e-filter').value;
-  const q = `?skip=0&limit=5000` + (cat ? `&category=${cat}` : '');
-  const data = await api('/api/admin/participants' + q);
-
-  emailTargets = data.data.filter(p => {
-    if (filter === 'unsent') return !p.email_sent;
-    if (filter === 'sent') return p.email_sent;
-    return true;
-  });
-  selectedTokens.clear();
-  renderEmailTable();
+async function sendToUnresponded() {
+  const targets = pFilteredView.filter(p => p.email_sent && !p.responded).map(p => p.token);
+  if (targets.length === 0) { toast('현재 뷰에 미응답 대상이 없습니다', 'error'); return; }
+  if (!confirm(`현재 필터에 해당하는 미응답자 ${targets.length}명에게 재발송합니다. 계속할까요?`)) return;
+  await runSend(targets);
 }
 
-function renderEmailTable() {
-  document.getElementById('btn-send').disabled = selectedTokens.size === 0;
-  document.getElementById('e-status').textContent = `${emailTargets.length}명 조회 / ${selectedTokens.size}명 선택`;
-
-  const allChecked = emailTargets.length > 0 && selectedTokens.size === emailTargets.length;
-  document.getElementById('e-table').innerHTML = `<table>
-    <thead><tr>
-      <th class="checkbox-col"><input type="checkbox" ${allChecked ? 'checked' : ''} onchange="toggleAllEmail(this.checked)"></th>
-      <th>이름</th><th>소속</th><th>직군</th><th>이메일</th><th>상태</th>
-    </tr></thead>
-    <tbody>${emailTargets.map(p => `<tr>
-      <td class="checkbox-col"><input type="checkbox" data-token="${p.token}" ${selectedTokens.has(p.token) ? 'checked' : ''} onchange="toggleEmailSelect('${p.token}', this.checked)"></td>
-      <td>${p.name}</td>
-      <td>${p.org || ''}</td>
-      <td><span class="badge badge-blue">${p.category || ''}</span></td>
-      <td style="font-size:12px">${p.email}</td>
-      <td>${p.email_sent ? '<span class="badge badge-green">발송완료</span>' : '<span class="badge badge-gray">미발송</span>'}</td>
-    </tr>`).join('')}</tbody>
-  </table>`;
-}
-
-function toggleAllEmail(checked) {
-  if (checked) emailTargets.forEach(p => selectedTokens.add(p.token));
-  else selectedTokens.clear();
-  renderEmailTable();
-}
-
-function toggleEmailSelect(token, checked) {
-  if (checked) selectedTokens.add(token);
-  else selectedTokens.delete(token);
-  renderEmailTable();
-}
-
-async function sendEmails() {
-  if (selectedTokens.size === 0) return;
-  if (!confirm(`${selectedTokens.size}명에게 설문 이메일을 발송합니다. 계속하시겠습니까?`)) return;
-
+async function runSend(tokens) {
   const btn = document.getElementById('btn-send');
   btn.disabled = true;
-  btn.textContent = '발송 중...';
-  document.getElementById('e-status').textContent = '발송 진행 중...';
-
+  btn.textContent = `발송 중 (${tokens.length})...`;
   try {
     const result = await api('/api/admin/email/send', {
       method: 'POST',
-      body: JSON.stringify({ tokens: [...selectedTokens] }),
+      body: JSON.stringify({ tokens }),
     });
-    toast(`발송 완료: ${result.sent}건 성공, ${result.failed}건 실패`);
-    document.getElementById('e-status').textContent = `결과: ${result.sent}건 발송, ${result.failed}건 실패, ${result.skipped}건 건너뜀`;
-    loadEmailTargets();
+    toast(`발송 완료: ${result.sent}건 성공${result.failed ? `, ${result.failed}건 실패` : ''}`);
+    await loadParticipants(pPage);
   } catch (e) {
     toast('발송 실패: ' + e.message, 'error');
-  } finally {
-    btn.textContent = '선택 대상자에게 발송';
-    btn.disabled = false;
   }
 }
 
+function exportParticipantLinks() {
+  const rows = [['name', 'email', 'org', 'category', 'token', 'email_sent_at_kst', 'responded', 'survey_link']];
+  pCache.forEach(p => {
+    rows.push([p.name, p.email, p.org || '', p.category || '', p.token,
+      p.email_sent_at ? fmtKST(p.email_sent_at) : '',
+      p.responded ? 'Y' : 'N',
+      `https://burn001.github.io/auri-ai-survey/?token=${p.token}`]);
+  });
+  const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'participants_links.csv';
+  a.click();
+}
+
+// ── Email Preview Modal ──
 let _previewBlobUrl = null;
 async function previewEmail() {
-  const preview = document.getElementById('email-preview');
   try {
     const res = await fetch(API + '/api/admin/email/preview', {
       method: 'POST',
@@ -269,12 +293,24 @@ async function previewEmail() {
     const html = await res.text();
     if (_previewBlobUrl) URL.revokeObjectURL(_previewBlobUrl);
     _previewBlobUrl = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
-    preview.style.display = 'block';
-    preview.innerHTML = `<iframe src="${_previewBlobUrl}"></iframe>`;
+    document.getElementById('preview-body').innerHTML = `<iframe src="${_previewBlobUrl}"></iframe>`;
+    document.getElementById('preview-modal').style.display = 'flex';
   } catch (e) {
     toast('미리보기 실패: ' + e.message, 'error');
   }
 }
+
+function closePreview(e) {
+  if (e && e.target !== e.currentTarget) return;
+  document.getElementById('preview-modal').style.display = 'none';
+  document.getElementById('preview-body').innerHTML = '';
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && document.getElementById('preview-modal').style.display === 'flex') {
+    closePreview();
+  }
+});
 
 // ── Responses ──
 async function loadResponses() {

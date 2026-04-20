@@ -164,12 +164,30 @@ async def list_participants(
 ):
     _check_admin(x_admin_key)
     db = get_db()
-    query = {}
+    match: dict = {}
     if category:
-        query["category"] = category
-    cursor = db.participants.find(query, {"_id": 0}).skip(skip).limit(limit)
+        match["category"] = category
+
+    pipeline = [
+        {"$match": match},
+        {"$lookup": {
+            "from": "responses",
+            "localField": "token",
+            "foreignField": "token",
+            "as": "resp",
+        }},
+        {"$addFields": {
+            "responded": {"$gt": [{"$size": "$resp"}, 0]},
+            "response_submitted_at": {"$arrayElemAt": ["$resp.submitted_at", 0]},
+            "response_updated_at": {"$arrayElemAt": ["$resp.updated_at", 0]},
+        }},
+        {"$project": {"resp": 0, "_id": 0}},
+        {"$skip": skip},
+        {"$limit": limit},
+    ]
+    cursor = db.participants.aggregate(pipeline)
     results = [doc async for doc in cursor]
-    total = await db.participants.count_documents(query)
+    total = await db.participants.count_documents(match)
     return {"total": total, "count": len(results), "data": results}
 
 
