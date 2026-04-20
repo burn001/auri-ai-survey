@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>설문 관리자 | AURI AI Survey</title>
+  <title>건축 AI 설문 관리자 | AURI</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="admin.css">
@@ -13,19 +13,21 @@
 <!-- Login -->
 <div id="login" class="login-wrap">
   <div class="login-box">
-    <h2>AURI AI Survey Admin</h2>
-    <p>관리자 인증키를 입력하세요</p>
-    <input type="password" id="admin-key-input" placeholder="Admin Key" autofocus>
+    <h2>건축 AI 설문 Admin</h2>
+    <p>관리자 전용 토큰을 입력하세요</p>
+    <input type="password" id="admin-token-input" placeholder="Admin Token (24자리)" autofocus>
     <button onclick="doLogin()">로그인</button>
     <p id="login-error" style="color:var(--red);font-size:12px;margin-top:8px"></p>
+    <p style="font-size:11px;color:#999;margin-top:12px">※ 개별 관리자마다 고유 토큰이 발급됩니다. 토큰 URL로 접속 시 자동 로그인됩니다.</p>
   </div>
 </div>
 
 <!-- App -->
 <div id="app" class="app" style="display:none">
   <nav class="sidebar">
-    <h1>Survey Admin</h1>
-    <p class="subtitle">AURI AI Survey</p>
+    <h1>AI Survey</h1>
+    <p class="subtitle">건축 AI 실무자 설문</p>
+    <p id="admin-profile" style="font-size:11px;color:#94a3b8;margin:4px 0 20px"></p>
     <a class="nav-item active" data-page="dashboard">대시보드</a>
     <a class="nav-item" data-page="participants">대상자 & 이메일</a>
     <a class="nav-item" data-page="responses">응답 조회</a>
@@ -40,7 +42,7 @@
       <div id="cat-bars" class="cat-bar"></div>
     </div>
 
-    <!-- Participants & Email (통합) -->
+    <!-- Participants & Email -->
     <div id="page-participants" class="page">
       <h2 class="page-title">대상자 & 이메일</h2>
       <div class="table-wrap">
@@ -111,6 +113,38 @@
   </div>
 </div>
 
+<!-- Response Detail Modal -->
+<div id="resp-modal" class="modal-backdrop" style="display:none" onclick="closeRespModal(event)">
+  <div class="modal-box" onclick="event.stopPropagation()" style="width:1000px;max-width:96vw">
+    <div class="modal-header">
+      <span id="resp-modal-title">응답 상세</span>
+      <button class="modal-close" onclick="closeRespModal()" aria-label="닫기">&times;</button>
+    </div>
+    <div class="modal-body" id="resp-modal-body" style="max-height:80vh;overflow:auto"></div>
+  </div>
+</div>
+
+<!-- Email Log Modal -->
+<div id="log-modal" class="modal-backdrop" style="display:none" onclick="closeLogModal(event)">
+  <div class="modal-box" onclick="event.stopPropagation()" style="width:900px;max-width:95vw">
+    <div class="modal-header">
+      <span id="log-modal-title">이메일 발송 이력</span>
+      <button class="modal-close" onclick="closeLogModal()" aria-label="닫기">&times;</button>
+    </div>
+    <div class="modal-body" id="log-modal-body" style="max-height:70vh;overflow:auto"></div>
+  </div>
+</div>
+
+<script type="module">
+  // 빌드 산출물에 questions.js가 복사되어 있으면 스키마를 window에 노출. 없어도 admin 기본 기능은 동작.
+  try {
+    const mod = await import('./questions.js');
+    window.SURVEY_SECTIONS = mod.sections;
+    window.Q_TYPE = mod.Q_TYPE;
+  } catch (e) {
+    console.warn('questions.js not loaded — 응답 상세 조회에서 문항 텍스트가 표시되지 않습니다.', e);
+  }
+</script>
 <script src="admin.js"></script>
 </body>
 </html>

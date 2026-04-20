@@ -32,7 +32,9 @@ jobs:
           npm run build
 
       - name: Copy admin dashboard to dist
-        run: cp -r frontend/admin frontend/dist/admin
+        run: |
+          cp -r frontend/admin frontend/dist/admin
+          cp frontend/src/questions.js frontend/dist/admin/questions.js
 
       - uses: actions/upload-pages-artifact@v3
         with:
