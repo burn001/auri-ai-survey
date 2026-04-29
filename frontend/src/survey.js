@@ -52,6 +52,8 @@ export class SurveyEngine {
     const urlParams = new URLSearchParams(window.location.search);
     this.token = urlParams.get('token');
     this.justRegistered = urlParams.get('just_registered') === '1';
+    // 직원 테스트 모드: ?source=staff 진입 시 분석 제외 마커 부여
+    this.isStaffMode = urlParams.get('source') === 'staff';
     this.participant = null;
     this.submitted = false;
     this.submittedAt = null;
@@ -649,12 +651,21 @@ export class SurveyEngine {
       </div>
     ` : '';
 
+    const staffBanner = this.isStaffMode ? `
+      <div class="register-card" style="background:#fef3c7;border-color:#fcd34d">
+        <p style="margin:0;color:#92400e;font-weight:500">
+          🧪 <strong>직원 테스트 모드</strong> — 이 링크로 등록된 응답은 정원·통계·분석 대상에서 자동 제외됩니다.
+        </p>
+      </div>
+    ` : '';
     this.container.innerHTML = `
       <div class="survey-container">
         <div class="register-landing">
           <div class="register-institution">${m.institution}</div>
           <h1 class="register-title">${m.title}</h1>
           <div class="register-subtitle">${m.subtitle}</div>
+
+          ${staffBanner}
 
           <div class="register-card">
             <h2>조사 목적</h2>
@@ -1104,6 +1115,7 @@ export class SurveyEngine {
         consent_reward: !!d.consent_reward,
         reward_name: d.consent_reward ? (d.reward_name || '').trim() : '',
         reward_phone: d.consent_reward ? (d.reward_phone || '').trim() : '',
+        is_staff: !!this.isStaffMode,
       };
       const res = await fetch(`${API_BASE}/ai/api/survey/register`, {
         method: 'POST',
@@ -1150,6 +1162,7 @@ export class SurveyEngine {
       const url = new URL(window.location.href);
       url.searchParams.set('token', data.token);
       url.searchParams.set('just_registered', '1');
+      if (this.isStaffMode) url.searchParams.set('source', 'staff');
       window.location.href = url.toString();
     } catch (e) {
       this.regError = e.message || '등록 중 오류가 발생했습니다. 잠시 후 다시 시도해 주십시오.';

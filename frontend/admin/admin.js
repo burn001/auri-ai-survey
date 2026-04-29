@@ -220,10 +220,11 @@ function renderParticipants() {
         ? `<span class="badge badge-blue">응답</span><div style="font-size:11px;color:var(--text3);margin-top:2px">${fmtKST(p.response_submitted_at)}</div>`
         : ((count > 0 || p.email_sent) ? '<span class="badge badge-orange">미응답</span>' : '<span class="badge badge-gray">-</span>');
       const link = `${SURVEY_BASE}/?token=${p.token}`;
-      const isSelf = p.source === 'self';
-      const sourceBadge = isSelf
-        ? '<span class="badge badge-purple">자가등록</span>'
-        : '<span class="badge badge-gray">사전 import</span>';
+      const sourceBadge = p.source === 'staff'
+        ? '<span class="badge badge-orange">직원 테스트</span>'
+        : (p.source === 'self'
+          ? '<span class="badge badge-purple">자가등록</span>'
+          : '<span class="badge badge-gray">사전 import</span>');
       return `<tr>
         <td class="checkbox-col"><input type="checkbox" ${pSelected.has(p.token) ? 'checked' : ''} onchange="toggleRowSelect('${p.token}', this.checked)"></td>
         <td>${p.name || (p.reward_name ? p.reward_name : '<span style="color:var(--text3)">(이름 미수집)</span>')}</td>
@@ -435,9 +436,11 @@ async function loadResponses() {
       const commentBadge = cnt > 0
         ? `<span class="badge badge-orange" style="margin-left:4px">💬 ${cnt}</span>`
         : '';
-      const sourceBadge = r.source === 'self'
-        ? '<span class="badge badge-purple">자가등록</span>'
-        : '<span class="badge badge-gray">사전 import</span>';
+      const sourceBadge = r.source === 'staff'
+        ? '<span class="badge badge-orange">직원 테스트</span>'
+        : (r.source === 'self'
+          ? '<span class="badge badge-purple">자가등록</span>'
+          : '<span class="badge badge-gray">사전 import</span>');
       return `<tr>
         <td>${r.name || ''}</td>
         <td>${r.org || ''}</td>

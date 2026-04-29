@@ -78,7 +78,8 @@ class SelfRegisterRequest(BaseModel):
     consent_pi: bool                  # 필수동의 — 이메일 수집·이용
     consent_reward: bool = False      # 선택동의 — true면 reward_name/reward_phone 필요
     reward_name: str = ""             # 사례품 동의 시 수령자명
-    reward_phone: str = ""            # 사례품 동의 시 휴대폰 번호
+    reward_phone: str = ""             # 사례품 동의 시 휴대폰 번호
+    is_staff: bool = False             # 직원 테스트 모드 — source='staff', 정원·분석 제외
 
 
 class ResponseSubmit(BaseModel):

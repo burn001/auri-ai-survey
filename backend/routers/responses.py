@@ -39,7 +39,7 @@ EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 
 async def _completed_count_by_category(db) -> dict[str, int]:
-    """category별 완료 응답 수 (연구진 제외). QUOTA_PER_CATEGORY 4개 키만 보장."""
+    """category별 완료 응답 수 (연구진·직원 테스트 제외). QUOTA_PER_CATEGORY 4개 키만 보장."""
     pipeline = [
         {"$match": {"submitted_at": {"$ne": None}}},
         {"$lookup": {
@@ -49,7 +49,10 @@ async def _completed_count_by_category(db) -> dict[str, int]:
             "as": "p",
         }},
         {"$unwind": "$p"},
-        {"$match": {"p.category": {"$in": list(QUOTA_PER_CATEGORY.keys())}}},
+        {"$match": {
+            "p.category": {"$in": list(QUOTA_PER_CATEGORY.keys())},
+            "p.source": {"$ne": "staff"},
+        }},
         {"$group": {"_id": "$p.category", "count": {"$sum": 1}}},
     ]
     by_cat = {k: 0 for k in QUOTA_PER_CATEGORY}
@@ -238,16 +241,18 @@ async def self_register(body: SelfRegisterRequest, request: Request):
             "이 이메일로 이미 등록되어 있습니다. 처음 등록 시 받으신 메일의 링크로 접속하시거나, 메일을 못 받으셨다면 '토큰 재발송'을 요청해 주십시오.",
         )
 
-    if await _is_survey_closed(db):
-        raise HTTPException(
-            410,
-            f"설문이 마감되었습니다. (4직군 합산 {SURVEY_LIMIT}부 도달) 참여해 주셔서 감사합니다.",
-        )
-    if await _is_category_full(db, body.category):
-        raise HTTPException(
-            409,
-            f"'{body.category}' 직군 응답 정원({QUOTA_PER_CATEGORY[body.category]}부)이 충족되어 신규 참여가 마감되었습니다.",
-        )
+    # 직원 테스트(is_staff=true)는 정원·마감 검사 모두 건너뜀.
+    if not body.is_staff:
+        if await _is_survey_closed(db):
+            raise HTTPException(
+                410,
+                f"설문이 마감되었습니다. (4직군 합산 {SURVEY_LIMIT}부 도달) 참여해 주셔서 감사합니다.",
+            )
+        if await _is_category_full(db, body.category):
+            raise HTTPException(
+                409,
+                f"'{body.category}' 직군 응답 정원({QUOTA_PER_CATEGORY[body.category]}부)이 충족되어 신규 참여가 마감되었습니다.",
+            )
 
     now = datetime.utcnow()
     ip = request.client.host if request.client else ""
@@ -268,7 +273,7 @@ async def self_register(body: SelfRegisterRequest, request: Request):
         "rank": (body.rank or "").strip(),
         "duty": (body.duty or "").strip(),
         "phone": "",
-        "source": "self",
+        "source": "staff" if body.is_staff else "self",
         "consent_pi": True,
         "consent_pi_at": now,
         "consent_reward": bool(body.consent_reward),

@@ -96,6 +96,10 @@ async def list_responses(
             {"participant.source": "imported"},
             {"participant.source": {"$exists": False}},
         ]}})
+    elif source == "staff":
+        pipeline.append({"$match": {"participant.source": "staff"}})
+    elif source == "exclude_staff":
+        pipeline.append({"$match": {"participant.source": {"$ne": "staff"}}})
     pipeline += [
         {"$lookup": {
             "from": "review_comments",
@@ -156,6 +160,10 @@ async def export_csv(
         pipeline.append({"$match": {"p.source": "self"}})
     elif source == "imported":
         pipeline.append({"$match": {"$or": [{"p.source": "imported"}, {"p.source": {"$exists": False}}]}})
+    elif source == "staff":
+        pipeline.append({"$match": {"p.source": "staff"}})
+    elif source == "exclude_staff":
+        pipeline.append({"$match": {"p.source": {"$ne": "staff"}}})
     pipeline.append({"$sort": {"submitted_at": 1}})
     cursor = db.responses.aggregate(pipeline)
     docs = [doc async for doc in cursor]
@@ -219,6 +227,10 @@ async def list_participants(
     elif source == "imported":
         # 과거 데이터(필드 부재)도 imported로 간주
         match["$or"] = [{"source": "imported"}, {"source": {"$exists": False}}]
+    elif source == "staff":
+        match["source"] = "staff"
+    elif source == "exclude_staff":
+        match["source"] = {"$ne": "staff"}
 
     pipeline = [
         {"$match": match},
