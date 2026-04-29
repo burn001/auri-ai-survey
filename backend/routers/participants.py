@@ -462,7 +462,7 @@ def _serialize_comment(doc: dict) -> dict:
 @router.get("/threads")
 async def admin_list_threads(
     admin: dict = Depends(verify_admin_token),
-    survey_version: str = "v7",
+    survey_version: str = "v11",
     qid: Optional[str] = None,
     status: Optional[str] = None,
 ):
@@ -495,7 +495,7 @@ async def admin_create_comment(
     qid: str,
     body: CommentCreateRequest,
     admin: dict = Depends(verify_admin_token),
-    survey_version: str = "v7",
+    survey_version: str = "v11",
 ):
     text = (body.text or "").strip()
     if not text:

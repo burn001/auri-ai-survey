@@ -326,7 +326,7 @@ async def save_reviewer_comments(token: str, body: dict, request: Request):
             },
             "$setOnInsert": {
                 "token": token,
-                "survey_version": "v7",
+                "survey_version": "v11",
                 "responses": {},
                 "submitted_at": None,
             },
@@ -339,7 +339,7 @@ async def save_reviewer_comments(token: str, body: dict, request: Request):
 # ── Review Comment Threads (연구진 + 관리자 공유) ──
 
 @router.get("/survey/{token}/threads")
-async def list_threads(token: str, survey_version: str = "v7"):
+async def list_threads(token: str, survey_version: str = "v11"):
     """연구진 토큰으로 모든 코멘트 스레드를 조회한다.
     qid별로 그룹화하여 반환. 모든 작성자(다른 연구진 + 관리자)의 코멘트를 포함.
     """
@@ -362,7 +362,7 @@ async def create_comment(
     token: str,
     qid: str,
     body: CommentCreateRequest,
-    survey_version: str = "v7",
+    survey_version: str = "v11",
 ):
     """연구진이 새 코멘트(또는 답글)를 작성한다."""
     p = await _require_reviewer(token)

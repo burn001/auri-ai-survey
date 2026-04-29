@@ -1444,6 +1444,12 @@ export class SurveyEngine {
       case Q_TYPE.LIKERT_TABLE:
         inner = this.renderLikertTable(q);
         break;
+      case Q_TYPE.IPA_MATRIX:
+        inner = this.renderIpaMatrix(q);
+        break;
+      case Q_TYPE.TOOL_MATRIX:
+        inner = this.renderToolMatrix(q);
+        break;
       case Q_TYPE.TEXT:
         inner = this.renderTextInput(q);
         break;
@@ -1501,6 +1507,84 @@ export class SurveyEngine {
     });
     html += '</tbody></table></div>';
     return html;
+  }
+
+  // ── IPA Matrix (중요도 + 체감도) ──
+  renderIpaMatrix(q) {
+    const val = this.responses[q.id] || {};
+    const labelsImp = q.scaleLabelsImportance || ['1', '2', '3', '4', '5'];
+    const labelsExp = q.scaleLabelsExperience || ['1', '2', '3', '4', '5'];
+    const radio = (idx, axis, v) => {
+      const cur = (val[idx] || {})[axis];
+      const checked = String(cur) === String(v) ? 'checked' : '';
+      return `<td class="ipa-cell"><input type="radio" name="ipa-${q.id}-${idx}-${axis}" value="${v}" ${checked} onchange="window._engine.setIpaValue('${q.id}', ${idx}, '${axis}', '${v}')"></td>`;
+    };
+    let html = '<div class="ipa-matrix-wrap"><table class="ipa-matrix" data-qid="' + q.id + '">';
+    html += '<thead><tr><th rowspan="2" class="ipa-item-h">항목</th>';
+    html += `<th colspan="${labelsImp.length}" class="ipa-axis">(가) 중요도</th>`;
+    html += `<th colspan="${labelsExp.length + (q.hasNA ? 1 : 0)}" class="ipa-axis">(나) 체감도${q.hasNA ? ' (N=직무 상황 없음)' : ''}</th>`;
+    html += '</tr><tr>';
+    labelsImp.forEach((l, i) => { html += `<th class="ipa-label">${i+1}<br><small>${l}</small></th>`; });
+    labelsExp.forEach((l, i) => { html += `<th class="ipa-label">${i+1}<br><small>${l}</small></th>`; });
+    if (q.hasNA) html += '<th class="ipa-label">N</th>';
+    html += '</tr></thead><tbody>';
+    q.items.forEach((item, idx) => {
+      html += `<tr data-row="${idx}"><td class="ipa-item">(${idx+1}) ${item}</td>`;
+      for (let v = 1; v <= labelsImp.length; v++) html += radio(idx, 'imp', v);
+      for (let v = 1; v <= labelsExp.length; v++) html += radio(idx, 'exp', v);
+      if (q.hasNA) html += radio(idx, 'exp', 'N');
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+    return html;
+  }
+
+  setIpaValue(qid, idx, axis, val) {
+    const cur = this.responses[qid] || {};
+    const item = { ...(cur[idx] || {}) };
+    item[axis] = (axis === 'exp' && val === 'N') ? 'N' : Number(val);
+    cur[idx] = item;
+    this.responses[qid] = cur;
+    this.saveResponses();
+  }
+
+  // ── Tool Matrix (현재/희망 + 기타 직접입력) ──
+  renderToolMatrix(q) {
+    const val = this.responses[q.id] || { current: [], future: [], other_text: '' };
+    const labels = q.columnLabels || ['(가) 현재', '(나) 희망'];
+    const otherIdx = q.items.length;
+    const checkbox = (idx, axis) => {
+      const arr = val[axis] || [];
+      const checked = arr.includes(idx) ? 'checked' : '';
+      return `<td class="tool-cell"><input type="checkbox" ${checked} onchange="window._engine.setToolValue('${q.id}', ${idx}, '${axis}', this.checked)"></td>`;
+    };
+    let html = '<div class="tool-matrix-wrap"><table class="tool-matrix" data-qid="' + q.id + '">';
+    html += `<thead><tr><th class="tool-item-h">AI 도구</th><th>${labels[0]}</th><th>${labels[1]}</th></tr></thead><tbody>`;
+    q.items.forEach((item, idx) => {
+      html += `<tr><td class="tool-item">${item}</td>${checkbox(idx, 'current')}${checkbox(idx, 'future')}</tr>`;
+    });
+    if (q.otherLabel) {
+      const otherText = (val.other_text || '').replace(/"/g, '&quot;');
+      html += `<tr><td class="tool-item">${q.otherLabel} (직접 입력: <input type="text" class="tool-other-text" value="${otherText}" placeholder="도구명" oninput="window._engine.setToolOther('${q.id}', this.value)" />)</td>${checkbox(otherIdx, 'current')}${checkbox(otherIdx, 'future')}</tr>`;
+    }
+    html += '</tbody></table></div>';
+    return html;
+  }
+
+  setToolValue(qid, idx, axis, checked) {
+    const cur = this.responses[qid] || { current: [], future: [], other_text: '' };
+    const set = new Set(cur[axis] || []);
+    if (checked) set.add(idx); else set.delete(idx);
+    cur[axis] = [...set].sort((a, b) => a - b);
+    this.responses[qid] = cur;
+    this.saveResponses();
+  }
+
+  setToolOther(qid, text) {
+    const cur = this.responses[qid] || { current: [], future: [], other_text: '' };
+    cur.other_text = text;
+    this.responses[qid] = cur;
+    this.saveResponses();
   }
 
   renderTextInput(q) {

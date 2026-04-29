@@ -78,7 +78,7 @@ class SelfRegisterRequest(BaseModel):
 
 class ResponseSubmit(BaseModel):
     token: str
-    survey_version: str = "v7"
+    survey_version: str = "v11"
     responses: dict[str, Any]
     comments: Optional[dict[str, str]] = None  # reviewer (연구진) only
 
@@ -126,7 +126,7 @@ COMMENT_ROLES = {"reviewer", "admin"}
 
 class ReviewComment(BaseModel):
     id: str  # uuid hex
-    survey_version: str = "v7"
+    survey_version: str = "v11"
     qid: str  # 문항 ID
     author_role: str  # reviewer | admin
     author_token: str  # respondent or admin token (소유권 확인용)
