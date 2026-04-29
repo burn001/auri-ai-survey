@@ -17,6 +17,27 @@ const GATE = {
   RESUBMIT_CHOICE: 'resubmit_choice',
   READ_ONLY: 'read_only',
   OPEN: 'open',
+  REGISTER: 'register',  // 토큰 없는 공개 진입 — 랜딩/동의/정보입력 단계 진행
+  CLOSED: 'closed',      // 4직군 합산 정원(300부) 도달 — 모든 신규/이어작성 차단
+};
+
+// 4직군 균등 75부 = 합산 300부 (백엔드 QUOTA_PER_CATEGORY와 일치)
+const SURVEY_LIMIT = 300;
+
+const REG_STEP = {
+  LANDING: 'landing',
+  CONSENT: 'consent',
+  INFO: 'info',
+};
+
+const REGISTER_DRAFT_KEY = 'auri_ai_register_draft';
+
+// Q6 직군 옵션 텍스트 → 자가등록 category 값으로 매핑하기 위한 인덱스
+const CATEGORY_TO_Q6_INDEX = {
+  '설계': 0,
+  '시공': 1,
+  '유지관리': 2,
+  '건축행정': 3,
 };
 
 const EDIT_MODE = {
@@ -27,13 +48,20 @@ const EDIT_MODE = {
 export class SurveyEngine {
   constructor(container) {
     this.container = container;
-    this.token = new URLSearchParams(window.location.search).get('token');
+    const urlParams = new URLSearchParams(window.location.search);
+    this.token = urlParams.get('token');
+    this.justRegistered = urlParams.get('just_registered') === '1';
     this.participant = null;
     this.submitted = false;
     this.submittedAt = null;
     this.updatedAt = null;
     this.editMode = EDIT_MODE.NEW;
-    this.gate = this.token ? GATE.LOADING : GATE.DENIED;
+    this.gate = this.token ? GATE.LOADING : GATE.REGISTER;
+    this.regStep = REG_STEP.LANDING;
+    this.regDraft = this.loadRegisterDraft();
+    this.regError = '';
+    this.regSubmitting = false;
+    this.surveyStatus = null;
     this.responses = this.loadResponses();
     this.threads = {};                // { qid: [comment, ...] } — fetched from server
     this.threadsLoading = false;
@@ -56,13 +84,27 @@ export class SurveyEngine {
         this.render();
       });
     } else {
-      this.render();
+      this.fetchSurveyStatus().finally(() => this.render());
     }
+  }
+
+  async fetchSurveyStatus() {
+    try {
+      const res = await fetch(`${API_BASE}/ai/api/survey/status`);
+      if (!res.ok) return;
+      const data = await res.json();
+      this.surveyStatus = data;
+      if (data.is_closed) this.gate = GATE.CLOSED;
+    } catch {}
   }
 
   async verifyToken() {
     try {
       const res = await fetch(`${API_BASE}/ai/api/survey/${this.token}`);
+      if (res.status === 410) {
+        this.gate = GATE.CLOSED;
+        return;
+      }
       if (!res.ok) {
         this.gate = GATE.DENIED;
         return;
@@ -79,9 +121,45 @@ export class SurveyEngine {
       } else {
         this.gate = GATE.OPEN;
       }
+      // 자가등록자(또는 import 시 이미 분류된) category가 4직군 중 하나면
+      // Q6 응답을 자동 채워 분기 흐름을 즉시 활성화한다.
+      if (this.responses['Q6'] === undefined) {
+        const idx = CATEGORY_TO_Q6_INDEX[data.category];
+        if (idx !== undefined) {
+          this.responses['Q6'] = idx;
+          this.saveResponses();
+        }
+      }
     } catch {
       this.gate = GATE.DENIED;
     }
+  }
+
+  // ── Persistence: Register Draft ──
+  loadRegisterDraft() {
+    try {
+      const saved = localStorage.getItem(REGISTER_DRAFT_KEY);
+      return saved ? JSON.parse(saved) : this.emptyRegisterDraft();
+    } catch { return this.emptyRegisterDraft(); }
+  }
+
+  emptyRegisterDraft() {
+    return {
+      email: '', org: '', category: '',
+      dept: '', team: '', position: '', rank: '', duty: '',
+      consent_pi: false, consent_reward: false,
+      reward_name: '', reward_phone: '',
+    };
+  }
+
+  saveRegisterDraft() {
+    try {
+      localStorage.setItem(REGISTER_DRAFT_KEY, JSON.stringify(this.regDraft));
+    } catch {}
+  }
+
+  clearRegisterDraft() {
+    try { localStorage.removeItem(REGISTER_DRAFT_KEY); } catch {}
   }
 
   // ── Persistence ──
@@ -461,8 +539,16 @@ export class SurveyEngine {
       this.renderLoading();
       return;
     }
+    if (this.gate === GATE.CLOSED) {
+      this.renderClosed();
+      return;
+    }
     if (this.gate === GATE.DENIED) {
       this.renderAccessDenied();
+      return;
+    }
+    if (this.gate === GATE.REGISTER) {
+      this.renderRegister();
       return;
     }
     if (this.gate === GATE.RESUBMIT_CHOICE) {
@@ -492,6 +578,475 @@ export class SurveyEngine {
         </div>
       </div>
     `;
+  }
+
+  // ── Closed (4직군 합산 정원 도달) ──
+  renderClosed() {
+    const m = SURVEY_META;
+    const completed = this.surveyStatus?.completed ?? SURVEY_LIMIT;
+    const byCat = this.surveyStatus?.by_category || [];
+    const catRows = byCat.map(c => `
+      <tr>
+        <td style="color:var(--c-text-secondary);padding:6px 0">${this.escape(c.category)} 직군</td>
+        <td align="right" style="padding:6px 0"><strong>${c.completed}</strong> / ${c.quota}부 ${c.is_full ? '<span style="color:#a04040">· 마감</span>' : ''}</td>
+      </tr>
+    `).join('');
+    this.container.innerHTML = `
+      <div class="survey-container">
+        <div class="register-landing">
+          <div class="register-institution">${m.institution}</div>
+          <h1 class="register-title">설문이 마감되었습니다</h1>
+          <div class="register-card" style="text-align:center;padding:40px 24px">
+            <p style="font-size:16px;line-height:1.8;margin:0 0 12px">
+              4직군 합산 목표 응답 <strong>${SURVEY_LIMIT}부</strong>가 모두 채워져 추가 응답을 받지 않습니다.
+            </p>
+            <p style="color:var(--c-text-secondary);margin:0 0 16px">현재 완료 응답: <strong>${completed}부</strong></p>
+            ${byCat.length ? `<table style="margin:0 auto 16px;border-collapse:collapse;font-size:14px">${catRows}</table>` : ''}
+            <p style="font-size:15px;color:var(--c-text-secondary);margin:0">
+              본 조사에 관심 가져 주셔서 진심으로 감사드립니다.<br>
+              결과 활용 및 후속 안내는 추후 별도 공지를 통해 알려드리겠습니다.
+            </p>
+          </div>
+          <div class="register-meta">
+            <dl>
+              <dt>조사기관</dt><dd>${m.institution}</dd>
+              <dt>연구책임</dt><dd>${m.researcher}</dd>
+              <dt>문의</dt><dd>${m.contact}</dd>
+            </dl>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // ── Register (공개 단일 링크 자가등록) ──
+  renderRegister() {
+    if (this.regStep === REG_STEP.LANDING) return this.renderRegisterLanding();
+    if (this.regStep === REG_STEP.CONSENT) return this.renderRegisterConsent();
+    if (this.regStep === REG_STEP.INFO) return this.renderRegisterInfo();
+  }
+
+  renderRegisterLanding() {
+    const m = SURVEY_META;
+    const byCat = this.surveyStatus?.by_category || [];
+    const quotaHtml = byCat.length ? `
+      <div class="register-card">
+        <h2>직군별 응답 현황</h2>
+        <table style="width:100%;border-collapse:collapse;font-size:14px">
+          ${byCat.map(c => `
+            <tr>
+              <td style="padding:8px 0;color:var(--c-text-secondary)">${this.escape(c.category)} 직군</td>
+              <td align="right" style="padding:8px 0">
+                <strong>${c.completed}</strong> / ${c.quota}부
+                ${c.is_full ? '<span style="color:#a04040;margin-left:8px">· 마감</span>' : ''}
+              </td>
+            </tr>
+          `).join('')}
+        </table>
+        <p class="register-hint" style="margin-top:12px">각 직군 정원이 충족되면 해당 직군은 자동으로 마감됩니다. 조기 마감을 피하시려면 가급적 빠른 참여를 부탁드립니다.</p>
+      </div>
+    ` : '';
+
+    this.container.innerHTML = `
+      <div class="survey-container">
+        <div class="register-landing">
+          <div class="register-institution">${m.institution}</div>
+          <h1 class="register-title">${m.title}</h1>
+          <div class="register-subtitle">${m.subtitle}</div>
+
+          <div class="register-card">
+            <h2>조사 목적</h2>
+            <p>본 조사는 인공지능(AI) 기술이 건축 산업의 설계·시공·유지관리·건축행정 전 단계에 걸쳐 가져올 구조적 변화를 분석하고,
+               이에 대응하는 법·제도 및 정책 전략을 제시하는 것을 목적으로 합니다.
+               건축공간연구원(AURI) 2026년도 기본연구과제로 수행됩니다.</p>
+          </div>
+
+          <div class="register-card">
+            <h2>참여 안내</h2>
+            <ul>
+              <li>응답 대상: 건축 <strong>설계·시공·유지관리·건축행정</strong> 분야 실무자·연구자</li>
+              <li>소요 시간: 약 ${m.duration}</li>
+              <li>응답 중간에 자동 저장되며 링크를 다시 열면 이어서 작성할 수 있습니다.</li>
+              <li>응답 제출 시 등록하신 이메일로 <strong>완료 안내 메일이 자동 발송</strong>됩니다 (본인 응답 확인 링크 포함).</li>
+              <li>모든 응답은 통계 처리 후 <strong>익명</strong>으로 활용됩니다.</li>
+            </ul>
+          </div>
+
+          ${quotaHtml}
+
+          <div class="register-card register-reward">
+            <h2>🎁 사례품 안내</h2>
+            <p>설문에 끝까지 응답해 주신 분께는 감사의 표시로 <strong>스타벅스 e카드 2만원 교환권</strong>을 발송해 드립니다.
+               (수령을 원하시는 경우 다음 단계에서 휴대폰 번호 활용에 동의해 주시기 바랍니다.)</p>
+          </div>
+
+          <div class="register-meta">
+            <dl>
+              <dt>조사기관</dt><dd>${m.institution}</dd>
+              <dt>연구책임</dt><dd>${m.researcher}</dd>
+              <dt>문의</dt><dd>${m.contact}</dd>
+            </dl>
+          </div>
+
+          <button class="btn-start" id="btn-reg-start">참여하기 →</button>
+        </div>
+      </div>
+    `;
+    this.container.querySelector('#btn-reg-start')?.addEventListener('click', () => {
+      this.regStep = REG_STEP.CONSENT;
+      this.render();
+    });
+  }
+
+  renderRegisterConsent() {
+    const d = this.regDraft;
+    const errHtml = this.regError ? `<p class="register-error">${this.escape(this.regError)}</p>` : '';
+
+    this.container.innerHTML = `
+      <div class="survey-container">
+        <div class="register-stepper">
+          <span class="step done">①</span><span class="step-line"></span>
+          <span class="step active">②</span><span class="step-line"></span>
+          <span class="step">③</span>
+        </div>
+
+        <div class="register-card">
+          <h2>개인정보 수집·이용 동의</h2>
+          <p class="register-hint">「개인정보 보호법」 제15조에 따라 아래 사항을 안내드립니다.</p>
+
+          <div class="consent-info">
+            <h3>ⓘ 본 설문은 익명으로 진행됩니다 — 통계 처리 안내 (동의 불요)</h3>
+            <p>
+              직군·소속·부서·팀·직위·직급·담당업무 등 <strong>분류 정보</strong>와
+              <strong>설문 응답 내용</strong>은 통계 처리되어
+              <strong>개인을 식별할 수 없는 형태</strong>로만 분석·공표됩니다.
+              연구 결과의 보고서·논문 등에서 개별 응답자 또는 기관의 답변이 그대로 노출되지 않으며,
+              위 분류 정보와 응답 내용은 별도의 동의 절차를 거치지 않습니다.
+            </p>
+          </div>
+
+          <div class="consent-block">
+            <h3>① 필수동의 — 응답 완료 안내 메일 발송 목적</h3>
+            <table class="consent-table">
+              <tbody>
+                <tr><th>수집 항목</th>
+                  <td><strong>이메일 주소</strong></td></tr>
+                <tr><th>수집·이용 목적</th>
+                  <td>설문 응답 완료 안내 메일 발송 (본인 응답 확인 링크 포함).
+                      <strong>응답 분석·통계 처리 단계에서는 사용하지 않으며, 개인 식별 자료로 활용되지 않습니다.</strong></td></tr>
+                <tr><th>보유·이용 기간</th>
+                  <td>완료 메일 발송 후 즉시 파기 (응답 수정·재발송 요청 처리 시 연구 종료 시점까지 한정 보존)</td></tr>
+                <tr><th>거부 권리</th>
+                  <td>동의를 거부할 수 있으며, 거부 시 본 설문에 참여하실 수 없습니다.</td></tr>
+              </tbody>
+            </table>
+            <label class="consent-check">
+              <input type="checkbox" id="reg-consent-pi" ${d.consent_pi ? 'checked' : ''}>
+              <span>위 사항을 충분히 이해하였으며, 응답 완료 안내 메일 발송 목적의 이메일 수집·이용에 <strong>동의합니다(필수).</strong></span>
+            </label>
+          </div>
+
+          <div class="consent-block">
+            <h3>② 선택동의 — 사례품(스타벅스 e카드 2만원 교환권) 발송 목적</h3>
+            <table class="consent-table">
+              <tbody>
+                <tr><th>수집 항목</th>
+                  <td>이름, 휴대폰 번호</td></tr>
+                <tr><th>수집·이용 목적</th>
+                  <td>설문 참여 사례품(스타벅스 e카드 2만원 교환권) 발송. <strong>분석·통계 처리에는 사용하지 않습니다.</strong></td></tr>
+                <tr><th>보유·이용 기간</th>
+                  <td>발송 완료 후 즉시 파기 (지급 분쟁 시 6개월까지 한정 보존)</td></tr>
+                <tr><th>거부 권리</th>
+                  <td>동의를 거부할 수 있으며, 거부 시 사례품 발송이 불가합니다. (설문 참여는 가능)</td></tr>
+              </tbody>
+            </table>
+            <label class="consent-check">
+              <input type="checkbox" id="reg-consent-reward" ${d.consent_reward ? 'checked' : ''}>
+              <span>사례품 발송을 위한 이름·휴대폰 번호 수집·이용에 <strong>동의합니다(선택).</strong></span>
+            </label>
+          </div>
+
+          ${errHtml}
+
+          <div class="register-actions">
+            <button class="btn btn-prev" id="btn-reg-back">← 이전</button>
+            <button class="btn btn-next" id="btn-reg-next">다음 →</button>
+          </div>
+        </div>
+      </div>
+    `;
+    this.bindConsentEvents();
+  }
+
+  bindConsentEvents() {
+    this.container.querySelector('#btn-reg-back')?.addEventListener('click', () => {
+      this.regStep = REG_STEP.LANDING;
+      this.regError = '';
+      this.render();
+    });
+    this.container.querySelector('#reg-consent-pi')?.addEventListener('change', (e) => {
+      this.regDraft.consent_pi = e.target.checked;
+      this.saveRegisterDraft();
+    });
+    this.container.querySelector('#reg-consent-reward')?.addEventListener('change', (e) => {
+      this.regDraft.consent_reward = e.target.checked;
+      this.saveRegisterDraft();
+    });
+    this.container.querySelector('#btn-reg-next')?.addEventListener('click', () => {
+      if (!this.regDraft.consent_pi) {
+        this.regError = '필수동의(①)에 체크해 주셔야 다음 단계로 진행할 수 있습니다.';
+        this.render();
+        return;
+      }
+      this.regError = '';
+      this.regStep = REG_STEP.INFO;
+      this.render();
+    });
+  }
+
+  renderRegisterInfo() {
+    const d = this.regDraft;
+    const errHtml = this.regError ? `<p class="register-error">${this.escape(this.regError)}</p>` : '';
+    const submittingHtml = this.regSubmitting
+      ? '<span class="register-submitting">등록 중…</span>' : '';
+
+    const byCat = this.surveyStatus?.by_category || [];
+    const fullCats = new Set(byCat.filter(c => c.is_full).map(c => c.category));
+
+    const rewardBlock = d.consent_reward ? `
+      <div class="register-section reward-section">
+        <h3>🎁 사례품 수령 정보 <span class="required">(선택동의 시 필수)</span></h3>
+        <p class="register-hint">사례품 발송 외 다른 목적으로는 사용되지 않습니다.</p>
+        <div class="register-grid">
+          <label>
+            <span>이름 (수령자명) *</span>
+            <input type="text" id="reg-reward-name" value="${this.escape(d.reward_name)}" placeholder="응답자 본인 또는 수령자" />
+          </label>
+          <label>
+            <span>휴대폰 번호 *</span>
+            <input type="tel" id="reg-reward-phone" value="${this.escape(d.reward_phone)}" placeholder="010-0000-0000" />
+          </label>
+        </div>
+      </div>
+    ` : `
+      <div class="register-skip-reward">
+        사례품 발송 동의를 하지 않으셨으므로 이름·휴대폰 번호는 수집하지 않습니다.
+        (이전 단계에서 동의를 추가하실 수 있습니다.)
+      </div>
+    `;
+
+    const catRadio = (val, label, helper) => {
+      const isFull = fullCats.has(val);
+      const checked = d.category === val ? 'checked' : '';
+      const disabled = isFull ? 'disabled' : '';
+      const tag = isFull ? '<span style="margin-left:6px;color:#a04040;font-size:12px">· 정원 마감</span>' : '';
+      return `
+        <label class="register-radio ${isFull ? 'is-disabled' : ''}">
+          <input type="radio" name="reg-category" value="${val}" ${checked} ${disabled}>
+          <span><strong>${label}</strong>${tag}<br><small style="color:var(--c-text-secondary)">${helper}</small></span>
+        </label>
+      `;
+    };
+
+    this.container.innerHTML = `
+      <div class="survey-container">
+        <div class="register-stepper">
+          <span class="step done">①</span><span class="step-line"></span>
+          <span class="step done">②</span><span class="step-line"></span>
+          <span class="step active">③</span>
+        </div>
+
+        <div class="register-card">
+          <h2>응답자 정보 입력</h2>
+          <p class="register-hint">
+            <span class="required">*</span> 표시는 필수 항목입니다.
+            응답 분석에는 <strong>분류 정보(직군·소속·담당업무 등)</strong>만 활용되며,
+            이메일은 응답 완료 안내 메일 발송에만 사용됩니다.
+          </p>
+
+          <div class="register-section">
+            <h3>① 응답 완료 안내 받을 이메일 <span class="register-section-tag">(필수)</span></h3>
+            <p class="register-hint">제출 직후 이 주소로 응답 확인 링크가 자동 발송됩니다. 분석·통계 처리에는 사용되지 않습니다.</p>
+            <div class="register-grid">
+              <label class="full">
+                <span>이메일 *</span>
+                <input type="email" id="reg-email" value="${this.escape(d.email)}" placeholder="example@example.co.kr" />
+              </label>
+            </div>
+          </div>
+
+          <div class="register-section">
+            <h3>② 직군 및 소속 <span class="register-section-tag">(분류 통계용 — 동의 불요)</span></h3>
+            <p class="register-hint">주된 직무 기준 1개 직군을 선택해 주십시오. 정원이 마감된 직군은 선택할 수 없습니다.</p>
+            <div class="register-grid">
+              <label class="full">
+                <span>직군 *</span>
+                <div class="register-radio-row register-radio-grid">
+                  ${catRadio('설계', '설계 직군', '건축사, 구조·설비·소방 엔지니어, 계획·설계 전공 연구자 등')}
+                  ${catRadio('시공', '시공 직군', '현장관리자, CM, 시공 기술자, 시공 전공 연구자 등')}
+                  ${catRadio('유지관리', '유지관리 직군', '시설관리(FM), 자산관리, 유지관리 전공 연구자 등')}
+                  ${catRadio('건축행정', '건축행정 직군', '인허가·심의·건축물관리 담당 공무원, 행정·제도 전공 연구자 등')}
+                </div>
+              </label>
+              <label class="full">
+                <span>소속 기관·회사명 * <small>(예: ○○건축사사무소 / ○○건설 / ○○구청 / ○○대학교)</small></span>
+                <input type="text" id="reg-org" value="${this.escape(d.org)}" placeholder="소속 기관·회사명" />
+              </label>
+              <label>
+                <span>부서</span>
+                <input type="text" id="reg-dept" value="${this.escape(d.dept)}" placeholder="예) 설계1팀 / 안전관리팀" />
+              </label>
+              <label>
+                <span>팀</span>
+                <input type="text" id="reg-team" value="${this.escape(d.team)}" placeholder="예) 계획설계팀" />
+              </label>
+              <label>
+                <span>직위</span>
+                <input type="text" id="reg-position" value="${this.escape(d.position)}" placeholder="예) 팀장, 과장, 주임" />
+              </label>
+              <label>
+                <span>직급</span>
+                <input type="text" id="reg-rank" value="${this.escape(d.rank)}" placeholder="예) 책임·선임·전임 / 행정5급" />
+              </label>
+              <label class="full">
+                <span>담당업무</span>
+                <input type="text" id="reg-duty" value="${this.escape(d.duty)}" placeholder="예) 공동주택 계획설계 / 안전관리 총괄" />
+              </label>
+            </div>
+          </div>
+
+          ${rewardBlock}
+
+          ${errHtml}
+
+          <div class="register-actions">
+            <button class="btn btn-prev" id="btn-reg-back">← 이전</button>
+            <button class="btn btn-next" id="btn-reg-submit" ${this.regSubmitting ? 'disabled' : ''}>
+              ${this.regSubmitting ? '등록 중…' : '등록하고 설문 시작 →'}
+            </button>
+          </div>
+          ${submittingHtml}
+        </div>
+      </div>
+    `;
+    this.bindRegisterInfoEvents();
+  }
+
+  bindRegisterInfoEvents() {
+    const bind = (id, key) => {
+      const el = this.container.querySelector(`#${id}`);
+      if (!el) return;
+      el.addEventListener('input', () => {
+        this.regDraft[key] = el.value;
+        this.saveRegisterDraft();
+      });
+    };
+    bind('reg-email', 'email');
+    bind('reg-org', 'org');
+    bind('reg-dept', 'dept');
+    bind('reg-team', 'team');
+    bind('reg-position', 'position');
+    bind('reg-rank', 'rank');
+    bind('reg-duty', 'duty');
+    bind('reg-reward-name', 'reward_name');
+    bind('reg-reward-phone', 'reward_phone');
+
+    this.container.querySelectorAll('input[name="reg-category"]').forEach(radio => {
+      radio.addEventListener('change', (e) => {
+        if (e.target.checked) {
+          this.regDraft.category = e.target.value;
+          this.saveRegisterDraft();
+        }
+      });
+    });
+
+    this.container.querySelector('#btn-reg-back')?.addEventListener('click', () => {
+      this.regStep = REG_STEP.CONSENT;
+      this.regError = '';
+      this.render();
+    });
+    this.container.querySelector('#btn-reg-submit')?.addEventListener('click', () => {
+      this.submitRegistration();
+    });
+  }
+
+  async submitRegistration() {
+    const d = this.regDraft;
+    const errors = [];
+    const email = (d.email || '').trim();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.push('올바른 이메일을 입력해 주십시오.');
+    if (!d.consent_pi) errors.push('이메일 수집·이용에 동의해 주십시오 (필수).');
+    if (!['설계', '시공', '유지관리', '건축행정'].includes(d.category)) errors.push('직군(설계/시공/유지관리/건축행정)을 선택해 주십시오.');
+    if (!(d.org || '').trim()) errors.push('소속 기관·회사명을 입력해 주십시오.');
+    if (d.consent_reward) {
+      if (!(d.reward_name || '').trim()) errors.push('사례품 수령자명을 입력해 주십시오.');
+      const phone = (d.reward_phone || '').trim();
+      if (!phone || !/^[\d\-\s+()]{9,}$/.test(phone)) errors.push('올바른 휴대폰 번호를 입력해 주십시오.');
+    }
+    if (errors.length) {
+      this.regError = errors.join(' / ');
+      this.render();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
+    this.regError = '';
+    this.regSubmitting = true;
+    this.render();
+
+    try {
+      const payload = {
+        email: email,
+        org: (d.org || '').trim(),
+        category: d.category,
+        dept: (d.dept || '').trim(),
+        team: (d.team || '').trim(),
+        position: (d.position || '').trim(),
+        rank: (d.rank || '').trim(),
+        duty: (d.duty || '').trim(),
+        consent_pi: !!d.consent_pi,
+        consent_reward: !!d.consent_reward,
+        reward_name: d.consent_reward ? (d.reward_name || '').trim() : '',
+        reward_phone: d.consent_reward ? (d.reward_phone || '').trim() : '',
+      };
+      const res = await fetch(`${API_BASE}/ai/api/survey/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (res.status === 410) {
+        this.gate = GATE.CLOSED;
+        this.regSubmitting = false;
+        await this.fetchSurveyStatus();
+        this.render();
+        return;
+      }
+      if (res.status === 409) {
+        const err = await res.json().catch(() => ({}));
+        this.regError = err.detail || '해당 직군 응답 정원이 충족되어 신규 참여가 마감되었습니다.';
+        this.regSubmitting = false;
+        await this.fetchSurveyStatus();
+        this.render();
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return;
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `등록 실패 (${res.status})`);
+      }
+      const data = await res.json();
+      this.clearRegisterDraft();
+      // 발급된 토큰으로 이동 — 페이지 reload하여 토큰 인증 흐름 진입.
+      const url = new URL(window.location.href);
+      url.searchParams.set('token', data.token);
+      url.searchParams.set('just_registered', '1');
+      window.location.href = url.toString();
+    } catch (e) {
+      this.regError = e.message || '등록 중 오류가 발생했습니다. 잠시 후 다시 시도해 주십시오.';
+      this.regSubmitting = false;
+      this.render();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
   }
 
   // ── Access Denied ──
