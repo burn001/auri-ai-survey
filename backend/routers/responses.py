@@ -24,9 +24,11 @@ router = APIRouter(prefix="/api", tags=["responses"])
 # 자가등록·응답 진입 시 허용되는 직군 (Q6 분기와 일치)
 ALLOWED_SELF_CATEGORIES = {"설계", "시공", "유지관리", "건축행정"}
 
-# 직군별 응답 정원. 4직군 균등 75부 = 합산 300부.
-# 도달 시 해당 직군 신규 자가등록 차단. 4직군 모두 충족되면 전체 마감.
-# 연구진(category=연구진)은 정원 외.
+# 직군별 사례품 동의 응답 정원. 4직군 균등 75부 = 합산 300부.
+# 카운트 정의: 'consent_reward=true 인 응답 완료자'. 미동의자는 정원에 잡히지 않음.
+# 도달 시 해당 직군 신규 자가등록만 차단 — 이미 토큰을 받아 진행 중인 응답자는
+# 끝까지 제출·사례품 지급 가능 (verify_token / submit_response는 마감 검사 안 함).
+# 4직군 모두 충족되면 신규 자가등록 전체 마감. 연구진(category=연구진)은 정원 외.
 QUOTA_PER_CATEGORY = {
     "설계": 75,
     "시공": 75,
@@ -39,7 +41,8 @@ EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 
 async def _completed_count_by_category(db) -> dict[str, int]:
-    """category별 완료 응답 수 (연구진·직원 테스트 제외). QUOTA_PER_CATEGORY 4개 키만 보장."""
+    """category별 사례품 동의 응답 수 (연구진·직원 테스트 제외). QUOTA_PER_CATEGORY 4개 키만 보장.
+    정원의 정의: consent_reward=true 인 응답 완료자만 카운트. 미동의자는 정원 외."""
     pipeline = [
         {"$match": {"submitted_at": {"$ne": None}}},
         {"$lookup": {
@@ -52,6 +55,7 @@ async def _completed_count_by_category(db) -> dict[str, int]:
         {"$match": {
             "p.category": {"$in": list(QUOTA_PER_CATEGORY.keys())},
             "p.source": {"$ne": "staff"},
+            "p.consent_reward": True,
         }},
         {"$group": {"_id": "$p.category", "count": {"$sum": 1}}},
     ]
@@ -170,12 +174,7 @@ async def verify_token(token: str):
     if not participant:
         raise HTTPException(404, "유효하지 않은 설문 링크입니다.")
 
-    # 마감 후 신규 진입·이어작성·리뷰 모두 차단 (연구진 토큰은 예외)
-    if participant.get("category") != "연구진" and await _is_survey_closed(db):
-        raise HTTPException(
-            410,
-            f"설문이 마감되었습니다. (4직군 합산 {SURVEY_LIMIT}부 도달) 참여해 주셔서 감사합니다.",
-        )
+    # 토큰을 이미 보유한 응답자는 마감과 무관하게 진입 허용 — 신규 점유는 self_register에서만 차단.
 
     existing = await db.responses.find_one({"token": token}, {"_id": 0})
     has_submitted = bool(existing and existing.get("submitted_at"))
@@ -257,16 +256,17 @@ async def self_register(body: SelfRegisterRequest, request: Request):
             )
 
     # 직원 테스트(is_staff=true) + imported promote는 정원·마감 검사 모두 건너뜀.
+    # 정원의 정의: 사례품 동의(consent_reward=true) + 응답 완료자.
     if not body.is_staff and not existing:
         if await _is_survey_closed(db):
             raise HTTPException(
                 410,
-                f"설문이 마감되었습니다. (4직군 합산 {SURVEY_LIMIT}부 도달) 참여해 주셔서 감사합니다.",
+                f"설문 사례품 동의 응답 정원이 모두 충족되어 신규 참여가 마감되었습니다. (4직군 합산 {SURVEY_LIMIT}부 도달)",
             )
         if await _is_category_full(db, body.category):
             raise HTTPException(
                 409,
-                f"'{body.category}' 직군 응답 정원({QUOTA_PER_CATEGORY[body.category]}부)이 충족되어 신규 참여가 마감되었습니다.",
+                f"'{body.category}' 직군 사례품 동의 응답 정원({QUOTA_PER_CATEGORY[body.category]}부)이 충족되어 신규 참여가 마감되었습니다.",
             )
 
     now = datetime.utcnow()
@@ -636,12 +636,7 @@ async def submit_response(body: ResponseSubmit, request: Request):
     if not participant:
         raise HTTPException(404, "유효하지 않은 토큰입니다.")
 
-    # 마감 후 신규 제출·기제출 수정 모두 차단 (연구진 토큰은 예외)
-    if participant.get("category") != "연구진" and await _is_survey_closed(db):
-        raise HTTPException(
-            410,
-            f"설문이 마감되었습니다. (4직군 합산 {SURVEY_LIMIT}부 도달) 참여해 주셔서 감사합니다.",
-        )
+    # 토큰 보유자는 마감과 무관하게 제출·수정 허용 — 신규 점유는 self_register에서만 차단.
 
     now = datetime.utcnow()
     ip = request.client.host if request.client else ""
