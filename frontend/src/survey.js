@@ -146,7 +146,7 @@ export class SurveyEngine {
   emptyRegisterDraft() {
     return {
       email: '', org: '', category: '',
-      dept: '', team: '', position: '', rank: '', duty: '',
+      dept: '', team: '', position: '', duty: '',
       consent_pi: false, consent_reward: false,
       reward_name: '', reward_phone: '',
     };
@@ -717,7 +717,7 @@ export class SurveyEngine {
           <div class="consent-info">
             <h3>ⓘ 본 설문은 익명으로 진행됩니다 — 통계 처리 안내 (동의 불요)</h3>
             <p>
-              직군·소속·부서·팀·직위·직급·담당업무 등 <strong>분류 정보</strong>와
+              직군·소속·부서·팀·직위/직급·담당업무 등 <strong>분류 정보</strong>와
               <strong>설문 응답 내용</strong>은 통계 처리되어
               <strong>개인을 식별할 수 없는 형태</strong>로만 분석·공표됩니다.
               연구 결과의 보고서·논문 등에서 개별 응답자 또는 기관의 답변이 그대로 노출되지 않으며,
@@ -901,12 +901,8 @@ export class SurveyEngine {
                 <input type="text" id="reg-team" value="${this.escape(d.team)}" placeholder="예) 계획설계팀" />
               </label>
               <label>
-                <span>직위</span>
-                <input type="text" id="reg-position" value="${this.escape(d.position)}" placeholder="예) 팀장, 과장, 주임" />
-              </label>
-              <label>
-                <span>직급</span>
-                <input type="text" id="reg-rank" value="${this.escape(d.rank)}" placeholder="예) 책임·선임·전임 / 행정5급" />
+                <span>직위/직급</span>
+                <input type="text" id="reg-position" value="${this.escape(d.position)}" placeholder="예) 팀장 / 책임연구원 / 행정5급" />
               </label>
               <label class="full">
                 <span>담당업무</span>
@@ -946,7 +942,6 @@ export class SurveyEngine {
     bind('reg-dept', 'dept');
     bind('reg-team', 'team');
     bind('reg-position', 'position');
-    bind('reg-rank', 'rank');
     bind('reg-duty', 'duty');
     bind('reg-reward-name', 'reward_name');
     bind('reg-reward-phone', 'reward_phone');
@@ -1002,7 +997,6 @@ export class SurveyEngine {
         dept: (d.dept || '').trim(),
         team: (d.team || '').trim(),
         position: (d.position || '').trim(),
-        rank: (d.rank || '').trim(),
         duty: (d.duty || '').trim(),
         consent_pi: !!d.consent_pi,
         consent_reward: !!d.consent_reward,
