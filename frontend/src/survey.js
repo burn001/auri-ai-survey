@@ -1,4 +1,4 @@
-import { sections, Q_TYPE, SURVEY_META } from './questions.js';
+import { sections, Q_TYPE, SURVEY_META, SURVEY_VERSION } from './questions.js';
 
 const STORAGE_KEY = 'auri_survey_responses';
 const STORAGE_PAGE_KEY = 'auri_survey_page';
@@ -1841,6 +1841,33 @@ export class SurveyEngine {
           table?.classList.add('has-error');
           this.showError(q.id, '모든 항목에 응답해 주십시오.');
         }
+      } else if (q.type === Q_TYPE.IPA_MATRIX) {
+        ok = val && typeof val === 'object';
+        if (ok) {
+          for (let i = 0; i < q.items.length; i++) {
+            const cell = val[i];
+            const impOk = cell && (cell.imp >= 1 && cell.imp <= (q.scaleLabelsImportance?.length || 5));
+            const expOk = cell && (cell.exp === 'N' && q.hasNA ? true : (cell.exp >= 1 && cell.exp <= (q.scaleLabelsExperience?.length || 5)));
+            if (!impOk || !expOk) { ok = false; break; }
+          }
+        }
+        if (!ok) {
+          const table = this.container.querySelector(`.ipa-matrix[data-qid="${q.id}"]`);
+          table?.classList.add('has-error');
+          this.showError(q.id, '모든 항목의 중요도와 체감도를 평가해 주십시오.');
+        }
+      } else if (q.type === Q_TYPE.TOOL_MATRIX) {
+        const hasAny = val && typeof val === 'object' && (
+          (Array.isArray(val.current) && val.current.length > 0) ||
+          (Array.isArray(val.future) && val.future.length > 0) ||
+          (val.other_text && val.other_text.trim().length > 0)
+        );
+        ok = !!hasAny;
+        if (!ok) {
+          const table = this.container.querySelector(`.tool-matrix[data-qid="${q.id}"]`);
+          table?.classList.add('has-error');
+          this.showError(q.id, '현재 또는 향후 활용 도구를 하나 이상 표시해 주십시오.');
+        }
       } else if (q.type === Q_TYPE.TEXT) {
         ok = val && val.trim().length > 0;
         if (!ok) this.showError(q.id, '응답을 입력해 주십시오.');
@@ -1983,7 +2010,7 @@ export class SurveyEngine {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           token: this.token,
-          survey_version: 'v7',
+          survey_version: SURVEY_VERSION,
           responses: { ...this.responses },
         }),
       });
@@ -2019,7 +2046,7 @@ export class SurveyEngine {
     const data = {
       meta: {
         survey: SURVEY_META.title,
-        version: 'v7',
+        version: SURVEY_VERSION,
         submittedAt: new Date().toISOString(),
         idCode: this.responses['ID_CODE'] || '',
         token: this.token || '',

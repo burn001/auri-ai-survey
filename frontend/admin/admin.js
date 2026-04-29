@@ -810,6 +810,37 @@ function formatAnswer(q, val, allResp) {
     });
     return `<table class="inline-likert"><tbody>${rows.join('')}</tbody></table>`;
   }
+  if (q.type === QT.IPA_MATRIX) {
+    if (typeof val !== 'object') return `<code>${escapeHtml(JSON.stringify(val))}</code>`;
+    const rows = q.items.map((item, i) => {
+      const cell = val[i] || {};
+      const imp = cell.imp;
+      const exp = cell.exp;
+      const impLabel = imp ? `${imp} (${q.scaleLabelsImportance?.[imp - 1] || ''})` : '(무응답)';
+      const expLabel = exp === 'N' ? 'N (해당 없음)' : (exp ? `${exp} (${q.scaleLabelsExperience?.[exp - 1] || ''})` : '(무응답)');
+      return `<tr><td style="font-size:12px">${escapeHtml(item)}</td><td><strong>${escapeHtml(impLabel)}</strong></td><td><strong>${escapeHtml(expLabel)}</strong></td></tr>`;
+    });
+    return `<table class="inline-likert"><thead><tr><th>항목</th><th>중요도</th><th>체감도</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+  }
+  if (q.type === QT.TOOL_MATRIX) {
+    if (typeof val !== 'object') return `<code>${escapeHtml(JSON.stringify(val))}</code>`;
+    const cur = Array.isArray(val.current) ? val.current : [];
+    const fut = Array.isArray(val.future) ? val.future : [];
+    const otherIdx = q.items.length;
+    const rows = q.items.map((item, i) => {
+      const c = cur.includes(i) ? '✓' : '';
+      const f = fut.includes(i) ? '✓' : '';
+      return `<tr><td style="font-size:12px">${escapeHtml(item)}</td><td style="text-align:center">${c}</td><td style="text-align:center">${f}</td></tr>`;
+    });
+    if (q.otherLabel) {
+      const otherText = (val.other_text || '').trim();
+      const c = cur.includes(otherIdx) ? '✓' : '';
+      const f = fut.includes(otherIdx) ? '✓' : '';
+      const label = otherText ? `${q.otherLabel}: ${otherText}` : q.otherLabel;
+      rows.push(`<tr><td style="font-size:12px">${escapeHtml(label)}</td><td style="text-align:center">${c}</td><td style="text-align:center">${f}</td></tr>`);
+    }
+    return `<table class="inline-likert"><thead><tr><th>도구</th><th>${escapeHtml(q.columnLabels?.[0] || '현재')}</th><th>${escapeHtml(q.columnLabels?.[1] || '희망')}</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+  }
   if (q.type === QT.TEXT) {
     return `<div class="response-text">${escapeHtml(String(val)).replace(/\n/g, '<br>')}</div>`;
   }
