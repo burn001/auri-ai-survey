@@ -55,6 +55,11 @@ class ParticipantUpdate(BaseModel):
     reward_phone: Optional[str] = None
 
 
+class RecoverRequest(BaseModel):
+    """기존 자가등록자가 토큰을 분실한 경우 — email로 본인 토큰 링크 재발송."""
+    email: str
+
+
 class SelfRegisterRequest(BaseModel):
     """공개 단일 링크 자가등록 페이로드.
 

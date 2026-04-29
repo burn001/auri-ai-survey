@@ -28,6 +28,7 @@ const REG_STEP = {
   LANDING: 'landing',
   CONSENT: 'consent',
   INFO: 'info',
+  RECOVER: 'recover',
 };
 
 const REGISTER_DRAFT_KEY = 'auri_ai_register_draft';
@@ -624,6 +625,7 @@ export class SurveyEngine {
     if (this.regStep === REG_STEP.LANDING) return this.renderRegisterLanding();
     if (this.regStep === REG_STEP.CONSENT) return this.renderRegisterConsent();
     if (this.regStep === REG_STEP.INFO) return this.renderRegisterInfo();
+    if (this.regStep === REG_STEP.RECOVER) return this.renderRecover();
   }
 
   renderRegisterLanding() {
@@ -689,6 +691,11 @@ export class SurveyEngine {
           </div>
 
           <button class="btn-start" id="btn-reg-start">참여하기 →</button>
+
+          <p class="register-hint" style="text-align:center;margin-top:20px">
+            이미 등록하셨나요?
+            <a href="#" id="btn-reg-recover" style="color:var(--c-text-primary);text-decoration:underline;margin-left:6px">토큰 재발송 받기 →</a>
+          </p>
         </div>
       </div>
     `;
@@ -696,6 +703,96 @@ export class SurveyEngine {
       this.regStep = REG_STEP.CONSENT;
       this.render();
     });
+    this.container.querySelector('#btn-reg-recover')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      this.regStep = REG_STEP.RECOVER;
+      this.recoverEmail = '';
+      this.recoverError = '';
+      this.recoverSent = false;
+      this.recoverSubmitting = false;
+      this.render();
+    });
+  }
+
+  renderRecover() {
+    const errHtml = this.recoverError ? `<p class="register-error">${this.escape(this.recoverError)}</p>` : '';
+    const sentHtml = this.recoverSent ? `
+      <div class="register-card" style="background:#f0fdf4;border-color:#86efac">
+        <p style="margin:0;color:#166534">
+          <strong>입력하신 이메일이 등록되어 있다면 토큰 링크를 발송했습니다.</strong><br>
+          몇 분 내에 메일이 도착하지 않으면 스팸함을 확인해 주십시오.
+        </p>
+      </div>
+    ` : '';
+    this.container.innerHTML = `
+      <div class="survey-container">
+        <div class="register-info">
+          <h1 class="register-title">토큰 재발송</h1>
+          <p class="register-subtitle">이전에 자가등록 시 사용하신 이메일을 입력해 주십시오. 응답 진행 상태에 맞는 링크를 그 이메일로 다시 보내드립니다.</p>
+
+          ${sentHtml}
+
+          <div class="register-card">
+            <div class="register-form">
+              <label class="full">
+                <span>이메일 *</span>
+                <input type="email" id="recover-email" value="${this.escape(this.recoverEmail || '')}" placeholder="example@auri.re.kr" />
+              </label>
+            </div>
+            ${errHtml}
+            <div class="register-actions">
+              <button class="btn btn-prev" id="btn-recover-back">← 이전</button>
+              <button class="btn btn-next" id="btn-recover-submit" ${this.recoverSubmitting ? 'disabled' : ''}>
+                ${this.recoverSubmitting ? '발송 중…' : '재발송 요청'}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    this.container.querySelector('#recover-email')?.addEventListener('input', (e) => {
+      this.recoverEmail = e.target.value;
+    });
+    this.container.querySelector('#btn-recover-back')?.addEventListener('click', () => {
+      this.regStep = REG_STEP.LANDING;
+      this.recoverError = '';
+      this.recoverSent = false;
+      this.render();
+    });
+    this.container.querySelector('#btn-recover-submit')?.addEventListener('click', () => {
+      this.submitRecover();
+    });
+  }
+
+  async submitRecover() {
+    const email = (this.recoverEmail || '').trim();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      this.recoverError = '올바른 이메일을 입력해 주십시오.';
+      this.render();
+      return;
+    }
+    this.recoverError = '';
+    this.recoverSubmitting = true;
+    this.render();
+    try {
+      const res = await fetch(`${API_BASE}/ai/api/survey/recover`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `요청 실패 (${res.status})`);
+      }
+      this.recoverSent = true;
+      this.recoverSubmitting = false;
+      this.render();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (e) {
+      this.recoverError = e.message || '재발송 중 오류가 발생했습니다. 잠시 후 다시 시도해 주십시오.';
+      this.recoverSubmitting = false;
+      this.render();
+    }
   }
 
   renderRegisterConsent() {
@@ -806,7 +903,12 @@ export class SurveyEngine {
 
   renderRegisterInfo() {
     const d = this.regDraft;
-    const errHtml = this.regError ? `<p class="register-error">${this.escape(this.regError)}</p>` : '';
+    const recoverLinkHtml = this.regErrorRecover
+      ? '<a href="#" id="btn-reg-error-recover" style="color:var(--c-text-primary);text-decoration:underline;margin-left:6px">토큰 재발송 받기 →</a>'
+      : '';
+    const errHtml = this.regError
+      ? `<p class="register-error">${this.escape(this.regError)}${recoverLinkHtml}</p>`
+      : '';
     const submittingHtml = this.regSubmitting
       ? '<span class="register-submitting">등록 중…</span>' : '';
 
@@ -1018,9 +1120,23 @@ export class SurveyEngine {
       if (res.status === 409) {
         const err = await res.json().catch(() => ({}));
         this.regError = err.detail || '해당 직군 응답 정원이 충족되어 신규 참여가 마감되었습니다.';
+        this.regErrorRecover = /이미 등록/.test(this.regError);
         this.regSubmitting = false;
         await this.fetchSurveyStatus();
         this.render();
+        if (this.regErrorRecover) {
+          this.container.querySelector('#btn-reg-error-recover')?.addEventListener('click', (e) => {
+            e.preventDefault();
+            this.regStep = REG_STEP.RECOVER;
+            this.recoverEmail = (this.regDraft.email || '').trim();
+            this.recoverError = '';
+            this.recoverSent = false;
+            this.recoverSubmitting = false;
+            this.regError = '';
+            this.regErrorRecover = false;
+            this.render();
+          });
+        }
         window.scrollTo({ top: 0, behavior: 'smooth' });
         return;
       }

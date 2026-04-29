@@ -9,11 +9,12 @@ from models import (
     ResponseRecord,
     ParticipantUpdate,
     SelfRegisterRequest,
+    RecoverRequest,
     CommentCreateRequest,
     CommentUpdateRequest,
 )
 from services.db import get_db
-from services.email_service import render_completion, send_email
+from services.email_service import render_completion, render_email, send_email
 from config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -209,7 +210,7 @@ async def self_register(body: SelfRegisterRequest, request: Request):
     - email은 필수 (완료 안내 메일 발송용).
     - 직군(category)은 4직군 중 하나. 해당 직군 정원이 충족되면 신규 등록 차단.
     - 사례품 동의(consent_reward) 시에만 reward_name·reward_phone 수집.
-    - 토큰은 random uuid (HMAC 아님). 동일 email로 재등록 시 기존 토큰 반환(이어 작성).
+    - 토큰은 random uuid (HMAC 아님). 동일 email은 차단(409) — 분실 시 /survey/recover로 재발송.
     """
     s = get_settings()
 
@@ -226,42 +227,48 @@ async def self_register(body: SelfRegisterRequest, request: Request):
         if not body.reward_name.strip() or not body.reward_phone.strip():
             raise HTTPException(400, "사례품 수령자명과 휴대폰 번호를 입력해 주십시오.")
 
-    now = datetime.utcnow()
-    ip = request.client.host if request.client else ""
-    ua = request.headers.get("user-agent", "")
-
     db = get_db()
     existing = await db.participants.find_one({"email": email})
 
-    # 신규 자가등록은 직군 정원 또는 전체 마감 시 차단.
-    # 기등록자(import 또는 본인 재등록)의 정보 갱신은 허용.
-    if not existing:
-        if await _is_survey_closed(db):
-            raise HTTPException(
-                410,
-                f"설문이 마감되었습니다. (4직군 합산 {SURVEY_LIMIT}부 도달) 참여해 주셔서 감사합니다.",
-            )
-        if await _is_category_full(db, body.category):
-            raise HTTPException(
-                409,
-                f"'{body.category}' 직군 응답 정원({QUOTA_PER_CATEGORY[body.category]}부)이 충족되어 신규 참여가 마감되었습니다. 다른 직군이거나 이미 등록하신 경우라면 기존 링크로 이어 작성해 주십시오.",
-            )
+    # 동일 email은 신규 등록 자체를 차단 — 본인 확인은 메일 수신으로만 검증.
+    # 토큰을 응답에 노출하지 않고, 분실 복구는 /survey/recover로 처리.
+    if existing:
+        raise HTTPException(
+            409,
+            "이 이메일로 이미 등록되어 있습니다. 처음 등록 시 받으신 메일의 링크로 접속하시거나, 메일을 못 받으셨다면 '토큰 재발송'을 요청해 주십시오.",
+        )
 
-    # 사례품 동의 시 입력한 reward_name이 곧 응답자 이름. 미동의 시 익명 빈 문자열.
+    if await _is_survey_closed(db):
+        raise HTTPException(
+            410,
+            f"설문이 마감되었습니다. (4직군 합산 {SURVEY_LIMIT}부 도달) 참여해 주셔서 감사합니다.",
+        )
+    if await _is_category_full(db, body.category):
+        raise HTTPException(
+            409,
+            f"'{body.category}' 직군 응답 정원({QUOTA_PER_CATEGORY[body.category]}부)이 충족되어 신규 참여가 마감되었습니다.",
+        )
+
+    now = datetime.utcnow()
+    ip = request.client.host if request.client else ""
+    ua = request.headers.get("user-agent", "")
     name = (body.reward_name or "").strip() if body.consent_reward else ""
+    token = uuid.uuid4().hex[:16]
 
-    base_fields = {
+    doc = {
+        "token": token,
         "email": email,
-        "name": name if name else (existing.get("name", "") if existing else ""),
+        "name": name,
         "org": body.org.strip(),
         "category": body.category,
-        "field": (existing.get("field", "") if existing else ""),
+        "field": "",
         "dept": (body.dept or "").strip(),
         "team": (body.team or "").strip(),
         "position": (body.position or "").strip(),
         "rank": (body.rank or "").strip(),
         "duty": (body.duty or "").strip(),
-        "phone": "",  # 자가등록은 사무실 번호 안 받음
+        "phone": "",
+        "source": "self",
         "consent_pi": True,
         "consent_pi_at": now,
         "consent_reward": bool(body.consent_reward),
@@ -271,28 +278,71 @@ async def self_register(body: SelfRegisterRequest, request: Request):
         "register_ip": ip,
         "register_ua": ua,
         "register_updated_at": now,
+        "created_at": now,
     }
-
-    if existing:
-        token = existing["token"]
-        base_fields["source"] = existing.get("source", "imported")
-        await db.participants.update_one({"token": token}, {"$set": base_fields})
-        status = "updated"
-    else:
-        token = uuid.uuid4().hex[:16]
-        base_fields.update({
-            "token": token,
-            "source": "self",
-            "created_at": now,
-        })
-        await db.participants.insert_one(base_fields)
-        status = "created"
+    await db.participants.insert_one(doc)
 
     return {
-        "status": status,
+        "status": "created",
         "token": token,
         "survey_url": f"{s.SURVEY_BASE_URL}/?token={token}",
     }
+
+
+@router.post("/survey/recover")
+async def recover_token(body: RecoverRequest):
+    """자가등록자가 토큰 링크를 분실한 경우, 등록 시 사용한 email로 토큰 링크를 재발송한다.
+    - 응답에는 토큰을 노출하지 않는다 (메일 수신만이 본인 확인 메커니즘).
+    - 등록 여부와 무관하게 동일한 응답을 반환해 email 정찰을 어렵게 한다.
+    - 응답 미제출이면 '설문 시작 링크', 제출 완료면 '응답 확인·수정 링크'를 발송한다.
+    """
+    s = get_settings()
+    email = (body.email or "").strip().lower()
+    if not EMAIL_RE.match(email):
+        raise HTTPException(400, "올바른 이메일을 입력해 주십시오.")
+
+    db = get_db()
+    participant = await db.participants.find_one({"email": email}, {"_id": 0})
+    if not participant:
+        return {"status": "sent"}
+
+    token = participant["token"]
+    name = participant.get("name") or participant.get("reward_name") or "응답자"
+    org = participant.get("org", "")
+
+    existing_resp = await db.responses.find_one({"token": token}, {"submitted_at": 1})
+    has_submitted = bool(existing_resp and existing_resp.get("submitted_at"))
+
+    if has_submitted:
+        review_url = f"{s.SURVEY_BASE_URL}/?token={token}&review=1"
+        subject = "[AURI 건축AI 실무자 조사] 응답 확인·수정 링크 재발송"
+        html = render_completion(name, org, review_url)
+    else:
+        survey_url = f"{s.SURVEY_BASE_URL}/?token={token}"
+        subject = "[AURI 건축AI 실무자 조사] 설문 참여 링크 재발송"
+        html = render_email(name, org, survey_url)
+
+    log_doc = {
+        "batch_id": "auto-recovery",
+        "token": token,
+        "email": email,
+        "name": participant.get("name", ""),
+        "org": org,
+        "category": participant.get("category", ""),
+        "type": "recovery",
+        "subject": subject,
+        "admin_email": "system",
+        "admin_name": "자동 재발송",
+        "sent_at": datetime.utcnow(),
+    }
+    try:
+        send_email(email, subject, html)
+        log_doc.update({"status": "sent", "error": ""})
+    except Exception as e:
+        log_doc.update({"status": "failed", "error": str(e)})
+    await db.email_logs.insert_one(log_doc)
+
+    return {"status": "sent"}
 
 
 @router.patch("/survey/{token}/comments")
