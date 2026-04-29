@@ -421,21 +421,28 @@ document.addEventListener('keydown', e => {
 let rCache = [];
 async function loadResponses() {
   const cat = document.getElementById('r-category').value;
-  const q = `?skip=0&limit=200` + (cat ? `&category=${cat}` : '');
+  const src = document.getElementById('r-source')?.value || '';
+  const q = `?skip=0&limit=200`
+    + (cat ? `&category=${cat}` : '')
+    + (src ? `&source=${src}` : '');
   const data = await api('/ai/api/admin/responses' + q);
   rCache = data.data;
 
   document.getElementById('r-table').innerHTML = `<table>
-    <thead><tr><th>이름</th><th>소속</th><th>직군</th><th>제출일시</th><th>수정일시</th><th>상세</th></tr></thead>
+    <thead><tr><th>이름</th><th>소속</th><th>직군</th><th>출처</th><th>제출일시</th><th>수정일시</th><th>상세</th></tr></thead>
     <tbody>${data.data.map(r => {
       const cnt = r.comment_count || 0;
       const commentBadge = cnt > 0
         ? `<span class="badge badge-orange" style="margin-left:4px">💬 ${cnt}</span>`
         : '';
+      const sourceBadge = r.source === 'self'
+        ? '<span class="badge badge-purple">자가등록</span>'
+        : '<span class="badge badge-gray">사전 import</span>';
       return `<tr>
         <td>${r.name || ''}</td>
         <td>${r.org || ''}</td>
         <td><span class="badge badge-blue">${r.category || ''}</span></td>
+        <td>${sourceBadge}</td>
         <td style="font-size:12px">${r.submitted_at ? new Date(r.submitted_at).toLocaleString('ko') : ''}</td>
         <td style="font-size:12px">${r.updated_at ? new Date(r.updated_at).toLocaleString('ko') : '-'}</td>
         <td><button class="btn btn-sm btn-outline" onclick="showResponseDetail('${r.token}')">열기</button>${commentBadge}</td>
@@ -918,14 +925,17 @@ function closeRespModal(e) {
 
 async function downloadCSV() {
   try {
-    const res = await fetch(API + '/ai/api/admin/export', {
+    const src = document.getElementById('r-source')?.value || '';
+    const q = src ? `?source=${src}` : '';
+    const res = await fetch(API + '/ai/api/admin/export' + q, {
       headers: { 'X-Admin-Token': ADMIN_TOKEN },
     });
     if (!res.ok) throw new Error('No data');
     const blob = await res.blob();
+    const suffix = src ? `_${src}` : '';
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'survey_responses.csv';
+    a.download = `survey_responses${suffix}.csv`;
     a.click();
     toast('CSV 다운로드 완료');
   } catch (e) {

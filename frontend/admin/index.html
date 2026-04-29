@@ -86,7 +86,7 @@
     <!-- Responses -->
     <div id="page-responses" class="page">
       <h2 class="page-title">응답 조회</h2>
-      <div style="display:flex;gap:12px;margin-bottom:16px">
+      <div style="display:flex;gap:12px;margin-bottom:16px;align-items:center;flex-wrap:wrap">
         <select id="r-category">
           <option value="">전체 직군</option>
           <option value="설계">설계</option>
@@ -96,6 +96,11 @@
           <option value="연구진">연구진</option>
           <option value="기타">기타</option>
           <option value="미분류">미분류</option>
+        </select>
+        <select id="r-source">
+          <option value="">전체 출처</option>
+          <option value="imported">사전 import</option>
+          <option value="self">자가등록</option>
         </select>
         <button class="btn btn-outline btn-sm" onclick="loadResponses()">조회</button>
         <button class="btn btn-primary btn-sm" onclick="downloadCSV()">CSV 내보내기</button>
