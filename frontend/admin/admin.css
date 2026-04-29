@@ -164,6 +164,7 @@ tr:hover { background: #fafbfc; }
 .badge-blue { background: #eff6ff; color: #2563eb; }
 .badge-orange { background: #fff7ed; color: #c2410c; }
 .badge-red { background: #fef2f2; color: #dc2626; }
+.badge-purple { background: #f5f3ff; color: #7c3aed; }
 
 .btn-log {
   background: transparent;

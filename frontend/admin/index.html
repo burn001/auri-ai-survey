@@ -68,6 +68,11 @@
             <option value="unresponded">미응답만</option>
             <option value="responded">응답완료만</option>
           </select>
+          <select id="p-source">
+            <option value="">출처: 전체</option>
+            <option value="imported">사전 import</option>
+            <option value="self">자가등록</option>
+          </select>
           <button class="btn btn-blue btn-sm" id="btn-send" disabled onclick="sendSelected()">선택 발송 (0)</button>
           <button class="btn btn-outline btn-sm" onclick="sendToUnresponded()">미응답자 재발송</button>
           <button class="btn btn-outline btn-sm" onclick="previewEmail()">이메일 미리보기</button>

@@ -73,6 +73,7 @@ async def list_responses(
     skip: int = 0,
     limit: int = 100,
     category: Optional[str] = None,
+    source: Optional[str] = None,
 ):
     db = get_db()
 
@@ -88,6 +89,13 @@ async def list_responses(
     ]
     if category:
         pipeline.append({"$match": {"participant.category": category}})
+    if source == "self":
+        pipeline.append({"$match": {"participant.source": "self"}})
+    elif source == "imported":
+        pipeline.append({"$match": {"$or": [
+            {"participant.source": "imported"},
+            {"participant.source": {"$exists": False}},
+        ]}})
     pipeline += [
         {"$lookup": {
             "from": "review_comments",
@@ -109,8 +117,13 @@ async def list_responses(
             "submitted_at": 1,
             "updated_at": 1,
             "name": "$participant.name",
+            "email": "$participant.email",
             "org": "$participant.org",
             "category": "$participant.category",
+            "source": {"$ifNull": ["$participant.source", "imported"]},
+            "consent_reward": {"$ifNull": ["$participant.consent_reward", False]},
+            "reward_name": {"$ifNull": ["$participant.reward_name", ""]},
+            "reward_phone": {"$ifNull": ["$participant.reward_phone", ""]},
             "comment_count": {"$size": "$rc"},
         }},
     ]
@@ -120,7 +133,11 @@ async def list_responses(
 
 
 @router.get("/export")
-async def export_csv(admin: dict = Depends(verify_admin_token)):
+async def export_csv(
+    admin: dict = Depends(verify_admin_token),
+    source: Optional[str] = None,
+):
+    """응답 CSV 내보내기. source=self|imported 시 해당 출처만 추출."""
     db = get_db()
     import csv, io, json as _json
     from fastapi.responses import StreamingResponse
@@ -134,8 +151,12 @@ async def export_csv(admin: dict = Depends(verify_admin_token)):
             "as": "p",
         }},
         {"$unwind": {"path": "$p", "preserveNullAndEmptyArrays": True}},
-        {"$sort": {"submitted_at": 1}},
     ]
+    if source == "self":
+        pipeline.append({"$match": {"p.source": "self"}})
+    elif source == "imported":
+        pipeline.append({"$match": {"$or": [{"p.source": "imported"}, {"p.source": {"$exists": False}}]}})
+    pipeline.append({"$sort": {"submitted_at": 1}})
     cursor = db.responses.aggregate(pipeline)
     docs = [doc async for doc in cursor]
 
@@ -149,7 +170,7 @@ async def export_csv(admin: dict = Depends(verify_admin_token)):
 
     output = io.StringIO()
     writer = csv.writer(output)
-    header = ["token", "name", "org", "category", "submitted_at", "updated_at"] + sorted_keys
+    header = ["token", "name", "org", "category", "source", "submitted_at", "updated_at"] + sorted_keys
     writer.writerow(header)
 
     for d in docs:
@@ -160,6 +181,7 @@ async def export_csv(admin: dict = Depends(verify_admin_token)):
             p.get("name", ""),
             p.get("org", ""),
             p.get("category", ""),
+            p.get("source", "imported"),
             str(d.get("submitted_at", "")),
             str(d.get("updated_at", "")),
         ]
@@ -172,10 +194,11 @@ async def export_csv(admin: dict = Depends(verify_admin_token)):
         writer.writerow(row)
 
     output.seek(0)
+    suffix = f"_{source}" if source in ("self", "imported") else ""
     return StreamingResponse(
         iter(["\ufeff" + output.getvalue()]),
         media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": "attachment; filename=survey_responses.csv"},
+        headers={"Content-Disposition": f"attachment; filename=survey_responses{suffix}.csv"},
     )
 
 
@@ -183,6 +206,7 @@ async def export_csv(admin: dict = Depends(verify_admin_token)):
 async def list_participants(
     admin: dict = Depends(verify_admin_token),
     category: Optional[str] = None,
+    source: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
 ):
@@ -190,6 +214,11 @@ async def list_participants(
     match: dict = {}
     if category:
         match["category"] = category
+    if source == "self":
+        match["source"] = "self"
+    elif source == "imported":
+        # 과거 데이터(필드 부재)도 imported로 간주
+        match["$or"] = [{"source": "imported"}, {"source": {"$exists": False}}]
 
     pipeline = [
         {"$match": match},

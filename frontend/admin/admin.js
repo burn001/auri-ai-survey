@@ -150,8 +150,11 @@ function relTime(iso) {
 async function loadParticipants(page = 0) {
   pPage = page;
   const cat = document.getElementById('p-category').value;
-  const q = `?skip=0&limit=5000` + (cat ? `&category=${encodeURIComponent(cat)}` : '');
-  const data = await api('/ai/api/admin/participants' + q);
+  const src = document.getElementById('p-source')?.value || '';
+  const params = ['skip=0', 'limit=5000'];
+  if (cat) params.push(`category=${encodeURIComponent(cat)}`);
+  if (src) params.push(`source=${encodeURIComponent(src)}`);
+  const data = await api('/ai/api/admin/participants?' + params.join('&'));
   pCache = data.data;
   pSelected.clear();
   renderParticipants();
@@ -187,7 +190,7 @@ function renderParticipants() {
   document.getElementById('p-table').innerHTML = `<table>
     <thead><tr>
       <th class="checkbox-col"><input type="checkbox" ${allChecked ? 'checked' : ''} onchange="togglePageSelect(this.checked)"></th>
-      <th>이름</th><th>소속</th><th>직군</th><th>이메일</th>
+      <th>이름</th><th>소속</th><th>직군</th><th>출처</th><th>이메일</th>
       <th>발송</th><th>응답</th><th>토큰</th>
     </tr></thead>
     <tbody>${rows.map(p => {
@@ -217,11 +220,16 @@ function renderParticipants() {
         ? `<span class="badge badge-blue">응답</span><div style="font-size:11px;color:var(--text3);margin-top:2px">${fmtKST(p.response_submitted_at)}</div>`
         : ((count > 0 || p.email_sent) ? '<span class="badge badge-orange">미응답</span>' : '<span class="badge badge-gray">-</span>');
       const link = `${SURVEY_BASE}/?token=${p.token}`;
+      const isSelf = p.source === 'self';
+      const sourceBadge = isSelf
+        ? '<span class="badge badge-purple">자가등록</span>'
+        : '<span class="badge badge-gray">사전 import</span>';
       return `<tr>
         <td class="checkbox-col"><input type="checkbox" ${pSelected.has(p.token) ? 'checked' : ''} onchange="toggleRowSelect('${p.token}', this.checked)"></td>
-        <td>${p.name}</td>
+        <td>${p.name || (p.reward_name ? p.reward_name : '<span style="color:var(--text3)">(이름 미수집)</span>')}</td>
         <td>${p.org || ''}</td>
         <td><span class="badge badge-blue">${p.category || ''}</span></td>
+        <td>${sourceBadge}</td>
         <td style="font-size:12px">${p.email}</td>
         <td style="min-width:180px">${sendBadge} ${logBtn}</td>
         <td style="min-width:150px">${respBadge}</td>
@@ -263,6 +271,7 @@ function toggleRowSelect(token, checked) {
 }
 
 document.getElementById('p-category').addEventListener('change', () => loadParticipants(0));
+document.getElementById('p-source')?.addEventListener('change', () => loadParticipants(0));
 document.getElementById('p-search').addEventListener('input', () => { pPage = 0; renderParticipants(); });
 document.getElementById('p-send-status').addEventListener('change', () => { pPage = 0; renderParticipants(); });
 document.getElementById('p-resp-status').addEventListener('change', () => { pPage = 0; renderParticipants(); });
