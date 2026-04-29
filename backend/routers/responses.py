@@ -1,3 +1,6 @@
+import logging
+import re
+import uuid
 from fastapi import APIRouter, Request, HTTPException
 from datetime import datetime
 from uuid import uuid4
@@ -5,12 +8,110 @@ from models import (
     ResponseSubmit,
     ResponseRecord,
     ParticipantUpdate,
+    SelfRegisterRequest,
     CommentCreateRequest,
     CommentUpdateRequest,
 )
 from services.db import get_db
+from services.email_service import render_completion, send_email
+from config import get_settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["responses"])
+
+# 자가등록·응답 진입 시 허용되는 직군 (Q6 분기와 일치)
+ALLOWED_SELF_CATEGORIES = {"설계", "시공", "유지관리", "건축행정"}
+
+# 직군별 응답 정원. 4직군 균등 75부 = 합산 300부.
+# 도달 시 해당 직군 신규 자가등록 차단. 4직군 모두 충족되면 전체 마감.
+# 연구진(category=연구진)은 정원 외.
+QUOTA_PER_CATEGORY = {
+    "설계": 75,
+    "시공": 75,
+    "유지관리": 75,
+    "건축행정": 75,
+}
+SURVEY_LIMIT = sum(QUOTA_PER_CATEGORY.values())  # 300
+
+EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+
+async def _completed_count_by_category(db) -> dict[str, int]:
+    """category별 완료 응답 수 (연구진 제외). QUOTA_PER_CATEGORY 4개 키만 보장."""
+    pipeline = [
+        {"$match": {"submitted_at": {"$ne": None}}},
+        {"$lookup": {
+            "from": "participants",
+            "localField": "token",
+            "foreignField": "token",
+            "as": "p",
+        }},
+        {"$unwind": "$p"},
+        {"$match": {"p.category": {"$in": list(QUOTA_PER_CATEGORY.keys())}}},
+        {"$group": {"_id": "$p.category", "count": {"$sum": 1}}},
+    ]
+    by_cat = {k: 0 for k in QUOTA_PER_CATEGORY}
+    async for doc in db.responses.aggregate(pipeline):
+        by_cat[doc["_id"]] = doc["count"]
+    return by_cat
+
+
+async def _is_category_full(db, category: str) -> bool:
+    """해당 직군이 정원 충족(>= quota)되었는지."""
+    if category not in QUOTA_PER_CATEGORY:
+        return False
+    by_cat = await _completed_count_by_category(db)
+    return by_cat.get(category, 0) >= QUOTA_PER_CATEGORY[category]
+
+
+async def _is_survey_closed(db) -> bool:
+    """4직군 모두 정원 충족 시 전체 마감."""
+    by_cat = await _completed_count_by_category(db)
+    return all(by_cat.get(c, 0) >= q for c, q in QUOTA_PER_CATEGORY.items())
+
+
+async def _send_completion_email(participant: dict, token: str) -> None:
+    """응답 제출 직후 자동 발송. 실패해도 응답 처리는 영향받지 않음."""
+    s = get_settings()
+    if not s.GMAIL_USER or not s.GMAIL_APP_PASSWORD:
+        return
+    if not participant.get("email"):
+        return
+    db = get_db()
+    review_url = f"{s.SURVEY_BASE_URL}/?token={token}&review=1"
+    subject = "[AURI 건축AI 실무자 조사] 응답 완료 안내 — 내 응답 확인 링크"
+    html = render_completion(
+        participant.get("name") or participant.get("reward_name", "") or "응답자",
+        participant.get("org", ""),
+        review_url,
+    )
+    now = datetime.utcnow()
+    log_doc = {
+        "batch_id": "auto-completion",
+        "token": token,
+        "email": participant["email"],
+        "name": participant.get("name", ""),
+        "org": participant.get("org", ""),
+        "category": participant.get("category", ""),
+        "type": "completion",
+        "subject": subject,
+        "admin_email": "system",
+        "admin_name": "자동 발송",
+        "sent_at": now,
+    }
+    try:
+        send_email(participant["email"], subject, html)
+        log_doc.update({"status": "sent", "error": ""})
+        await db.email_logs.insert_one(log_doc)
+    except Exception as e:
+        err = str(e)
+        logger.warning(f"Completion email failed for {participant['email']}: {err}")
+        log_doc.update({"status": "failed", "error": err})
+        try:
+            await db.email_logs.insert_one(log_doc)
+        except Exception:
+            pass
 
 
 async def _require_reviewer(token: str) -> dict:
@@ -34,12 +135,43 @@ def _serialize_comment(doc: dict) -> dict:
     return out
 
 
+@router.get("/survey/status")
+async def survey_status():
+    """공개 — 직군별 완료 수·정원·마감 여부. 인트로/자가등록 화면에 표시."""
+    db = get_db()
+    by_cat = await _completed_count_by_category(db)
+    completed = sum(by_cat.values())
+    return {
+        "completed": completed,
+        "limit": SURVEY_LIMIT,
+        "is_closed": completed >= SURVEY_LIMIT or all(
+            by_cat.get(c, 0) >= q for c, q in QUOTA_PER_CATEGORY.items()
+        ),
+        "by_category": [
+            {
+                "category": c,
+                "completed": by_cat.get(c, 0),
+                "quota": q,
+                "is_full": by_cat.get(c, 0) >= q,
+            }
+            for c, q in QUOTA_PER_CATEGORY.items()
+        ],
+    }
+
+
 @router.get("/survey/{token}")
 async def verify_token(token: str):
     db = get_db()
     participant = await db.participants.find_one({"token": token}, {"_id": 0})
     if not participant:
         raise HTTPException(404, "유효하지 않은 설문 링크입니다.")
+
+    # 마감 후 신규 진입·이어작성·리뷰 모두 차단 (연구진 토큰은 예외)
+    if participant.get("category") != "연구진" and await _is_survey_closed(db):
+        raise HTTPException(
+            410,
+            f"설문이 마감되었습니다. (4직군 합산 {SURVEY_LIMIT}부 도달) 참여해 주셔서 감사합니다.",
+        )
 
     existing = await db.responses.find_one({"token": token}, {"_id": 0})
     has_submitted = bool(existing and existing.get("submitted_at"))
@@ -56,11 +188,110 @@ async def verify_token(token: str):
         "position": participant.get("position", ""),
         "rank": participant.get("rank", ""),
         "duty": participant.get("duty", ""),
+        "source": participant.get("source", "imported"),
+        "consent_pi": bool(participant.get("consent_pi", False)),
+        "consent_reward": bool(participant.get("consent_reward", False)),
+        "reward_name": participant.get("reward_name", ""),
+        "reward_phone": participant.get("reward_phone", ""),
         "has_responded": has_submitted,
         "responses": existing.get("responses") if has_submitted else None,
         "comments": existing.get("comments") if existing else None,
         "submitted_at": existing.get("submitted_at").isoformat() if has_submitted else None,
         "updated_at": existing.get("updated_at").isoformat() if existing and existing.get("updated_at") else None,
+    }
+
+
+# ── 공개 자가등록 (No Auth) ──
+
+@router.post("/survey/register")
+async def self_register(body: SelfRegisterRequest, request: Request):
+    """공개 단일 링크에서 응답자가 직접 정보를 입력하고 토큰을 발급받는다.
+    - email은 필수 (완료 안내 메일 발송용).
+    - 직군(category)은 4직군 중 하나. 해당 직군 정원이 충족되면 신규 등록 차단.
+    - 사례품 동의(consent_reward) 시에만 reward_name·reward_phone 수집.
+    - 토큰은 random uuid (HMAC 아님). 동일 email로 재등록 시 기존 토큰 반환(이어 작성).
+    """
+    s = get_settings()
+
+    email = (body.email or "").strip().lower()
+    if not EMAIL_RE.match(email):
+        raise HTTPException(400, "올바른 이메일을 입력해 주십시오.")
+    if not body.consent_pi:
+        raise HTTPException(400, "이메일 수집·이용에 동의해 주셔야 참여하실 수 있습니다.")
+    if body.category not in ALLOWED_SELF_CATEGORIES:
+        raise HTTPException(400, "직군(설계/시공/유지관리/건축행정)을 선택해 주십시오.")
+    if not (body.org or "").strip():
+        raise HTTPException(400, "소속 기관·회사명을 입력해 주십시오.")
+    if body.consent_reward:
+        if not body.reward_name.strip() or not body.reward_phone.strip():
+            raise HTTPException(400, "사례품 수령자명과 휴대폰 번호를 입력해 주십시오.")
+
+    now = datetime.utcnow()
+    ip = request.client.host if request.client else ""
+    ua = request.headers.get("user-agent", "")
+
+    db = get_db()
+    existing = await db.participants.find_one({"email": email})
+
+    # 신규 자가등록은 직군 정원 또는 전체 마감 시 차단.
+    # 기등록자(import 또는 본인 재등록)의 정보 갱신은 허용.
+    if not existing:
+        if await _is_survey_closed(db):
+            raise HTTPException(
+                410,
+                f"설문이 마감되었습니다. (4직군 합산 {SURVEY_LIMIT}부 도달) 참여해 주셔서 감사합니다.",
+            )
+        if await _is_category_full(db, body.category):
+            raise HTTPException(
+                409,
+                f"'{body.category}' 직군 응답 정원({QUOTA_PER_CATEGORY[body.category]}부)이 충족되어 신규 참여가 마감되었습니다. 다른 직군이거나 이미 등록하신 경우라면 기존 링크로 이어 작성해 주십시오.",
+            )
+
+    # 사례품 동의 시 입력한 reward_name이 곧 응답자 이름. 미동의 시 익명 빈 문자열.
+    name = (body.reward_name or "").strip() if body.consent_reward else ""
+
+    base_fields = {
+        "email": email,
+        "name": name if name else (existing.get("name", "") if existing else ""),
+        "org": body.org.strip(),
+        "category": body.category,
+        "field": (existing.get("field", "") if existing else ""),
+        "dept": (body.dept or "").strip(),
+        "team": (body.team or "").strip(),
+        "position": (body.position or "").strip(),
+        "rank": (body.rank or "").strip(),
+        "duty": (body.duty or "").strip(),
+        "phone": "",  # 자가등록은 사무실 번호 안 받음
+        "consent_pi": True,
+        "consent_pi_at": now,
+        "consent_reward": bool(body.consent_reward),
+        "consent_reward_at": now if body.consent_reward else None,
+        "reward_name": body.reward_name.strip() if body.consent_reward else "",
+        "reward_phone": body.reward_phone.strip() if body.consent_reward else "",
+        "register_ip": ip,
+        "register_ua": ua,
+        "register_updated_at": now,
+    }
+
+    if existing:
+        token = existing["token"]
+        base_fields["source"] = existing.get("source", "imported")
+        await db.participants.update_one({"token": token}, {"$set": base_fields})
+        status = "updated"
+    else:
+        token = uuid.uuid4().hex[:16]
+        base_fields.update({
+            "token": token,
+            "source": "self",
+            "created_at": now,
+        })
+        await db.participants.insert_one(base_fields)
+        status = "created"
+
+    return {
+        "status": status,
+        "token": token,
+        "survey_url": f"{s.SURVEY_BASE_URL}/?token={token}",
     }
 
 
@@ -286,6 +517,13 @@ async def submit_response(body: ResponseSubmit, request: Request):
     if not participant:
         raise HTTPException(404, "유효하지 않은 토큰입니다.")
 
+    # 마감 후 신규 제출·기제출 수정 모두 차단 (연구진 토큰은 예외)
+    if participant.get("category") != "연구진" and await _is_survey_closed(db):
+        raise HTTPException(
+            410,
+            f"설문이 마감되었습니다. (4직군 합산 {SURVEY_LIMIT}부 도달) 참여해 주셔서 감사합니다.",
+        )
+
     now = datetime.utcnow()
     ip = request.client.host if request.client else ""
     ua = request.headers.get("user-agent", "")
@@ -324,6 +562,8 @@ async def submit_response(body: ResponseSubmit, request: Request):
             {"token": body.token},
             {"$set": update_fields},
         )
+        if participant.get("category") != "연구진":
+            await _send_completion_email(participant, body.token)
         return {"status": "created", "token": body.token}
 
     record = ResponseRecord(
@@ -336,6 +576,8 @@ async def submit_response(body: ResponseSubmit, request: Request):
         user_agent=ua,
     )
     await db.responses.insert_one(record.model_dump())
+    if participant.get("category") != "연구진":
+        await _send_completion_email(participant, body.token)
     return {"status": "created", "token": body.token}
 
 

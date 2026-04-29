@@ -16,6 +16,20 @@ class Participant(BaseModel):
     position: str = ""
     rank: str = ""
     duty: str = ""
+    # 등록 출처: imported(엑셀 import) | self(공개 링크 자가등록)
+    source: str = "imported"
+    # 개인정보 동의 (자가등록 시 필수동의·선택동의 분리 기록)
+    consent_pi: bool = False
+    consent_pi_at: Optional[datetime] = None
+    consent_reward: bool = False
+    consent_reward_at: Optional[datetime] = None
+    # 사례품(스타벅스 e카드) 수령 정보 — 선택동의 시에만 채워짐
+    reward_name: str = ""
+    reward_phone: str = ""
+    # 자가등록 추적 메타
+    register_ip: str = ""
+    register_ua: str = ""
+    register_updated_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -37,6 +51,29 @@ class ParticipantUpdate(BaseModel):
     position: Optional[str] = None
     rank: Optional[str] = None
     duty: Optional[str] = None
+    reward_name: Optional[str] = None
+    reward_phone: Optional[str] = None
+
+
+class SelfRegisterRequest(BaseModel):
+    """공개 단일 링크 자가등록 페이로드.
+
+    필수: email(완료 메일 발송용) + 직군(category) + 소속(org).
+    선택: 부서·직위·직급·담당업무 — 통계 분석 보조 정보.
+    사례품(consent_reward) 동의 시에만 reward_name·reward_phone 수집.
+    """
+    email: str                     # 필수 — 응답 완료 안내 메일 발송용
+    org: str = ""                  # 소속 기관·회사명
+    category: str                  # "설계" | "시공" | "유지관리" | "건축행정"
+    dept: str = ""
+    team: str = ""
+    position: str = ""
+    rank: str = ""
+    duty: str = ""
+    consent_pi: bool                  # 필수동의 — 이메일 수집·이용
+    consent_reward: bool = False      # 선택동의 — true면 reward_name/reward_phone 필요
+    reward_name: str = ""             # 사례품 동의 시 수령자명
+    reward_phone: str = ""            # 사례품 동의 시 휴대폰 번호
 
 
 class ResponseSubmit(BaseModel):
