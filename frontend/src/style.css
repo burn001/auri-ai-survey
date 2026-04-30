@@ -430,6 +430,26 @@ body {
   vertical-align: middle;
 }
 
+.likert-table tbody td.likert-cell {
+  padding: 0;
+}
+
+.likert-cell-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  min-height: 44px;
+  padding: 12px 8px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+}
+
+.likert-cell-label:hover {
+  background: var(--c-bg-hover, rgba(0, 0, 0, 0.03));
+}
+
 .likert-table tbody td:first-child {
   text-align: left;
   font-size: 13.5px;
@@ -1274,8 +1294,9 @@ body {
 .tool-matrix th, .tool-matrix td { border: 1px solid #e5e5e5; padding: 8px 10px; text-align: center; }
 .tool-matrix .tool-item-h { width: 60%; text-align: left; padding: 10px; background: #fafafa; font-weight: 600; }
 .tool-matrix .tool-item { text-align: left; padding: 10px; line-height: 1.6; }
-.tool-matrix .tool-cell { width: 18%; }
+.tool-matrix .tool-cell { width: 13%; }
 .tool-matrix .tool-cell input[type="checkbox"] { width: 18px; height: 18px; accent-color: #2c2c2c; cursor: pointer; }
+.tool-matrix .tool-cell-disabled { background: repeating-linear-gradient(45deg, #f7f7f7 0 6px, #ececec 6px 12px); }
 .tool-matrix .tool-other-text { padding: 4px 8px; border: 1px solid #d6d6d6; border-radius: 4px; font-size: 12px; width: 200px; margin-left: 6px; }
 .tool-matrix tbody tr:nth-child(even) { background: #fafafa; }
 

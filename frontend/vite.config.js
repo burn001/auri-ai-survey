@@ -7,9 +7,10 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/api': {
-        target: 'http://localhost:8001',
+      '/ai/api': {
+        target: 'https://alris.ddns.net:8443',
         changeOrigin: true,
+        secure: false,
       },
     },
   },

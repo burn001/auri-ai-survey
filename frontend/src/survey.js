@@ -1624,7 +1624,7 @@ export class SurveyEngine {
       html += `<tr data-row="${idx}">`;
       html += `<td><span class="item-number">(${idx + 1})</span>${item}</td>`;
       for (let v = 1; v <= q.scaleLabels.length; v++) {
-        html += `<td><input type="radio" class="likert-radio" name="${q.id}_${idx}" value="${v}" /></td>`;
+        html += `<td class="likert-cell"><label class="likert-cell-label"><input type="radio" class="likert-radio" name="${q.id}_${idx}" value="${v}" /></label></td>`;
       }
       html += '</tr>';
     });
@@ -1671,10 +1671,10 @@ export class SurveyEngine {
     this.saveResponses();
   }
 
-  // ── Tool Matrix (현재/희망 + 기타 직접입력) ──
+  // ── Tool Matrix (현재/희망/불필요 + 기타 직접입력) ──
   renderToolMatrix(q) {
-    const val = this.responses[q.id] || { current: [], future: [], other_text: '' };
-    const labels = q.columnLabels || ['(가) 현재', '(나) 희망'];
+    const val = this.responses[q.id] || { current: [], future: [], none: [], other_text: '' };
+    const labels = q.columnLabels || ['(가) 현재 활용', '(나) 향후 활용 희망', '(다) 필요 없음'];
     const otherIdx = q.items.length;
     const checkbox = (idx, axis) => {
       const arr = val[axis] || [];
@@ -1682,29 +1682,70 @@ export class SurveyEngine {
       return `<td class="tool-cell"><input type="checkbox" ${checked} onchange="window._engine.setToolValue('${q.id}', ${idx}, '${axis}', this.checked)"></td>`;
     };
     let html = '<div class="tool-matrix-wrap"><table class="tool-matrix" data-qid="' + q.id + '">';
-    html += `<thead><tr><th class="tool-item-h">AI 도구</th><th>${labels[0]}</th><th>${labels[1]}</th></tr></thead><tbody>`;
+    html += `<thead><tr><th class="tool-item-h">AI 도구</th><th>${labels[0]}</th><th>${labels[1]}</th><th>${labels[2] || '(다) 필요 없음'}</th></tr></thead><tbody>`;
     q.items.forEach((item, idx) => {
-      html += `<tr><td class="tool-item">${item}</td>${checkbox(idx, 'current')}${checkbox(idx, 'future')}</tr>`;
+      html += `<tr><td class="tool-item">${item}</td>${checkbox(idx, 'current')}${checkbox(idx, 'future')}${checkbox(idx, 'none')}</tr>`;
     });
     if (q.otherLabel) {
       const otherText = (val.other_text || '').replace(/"/g, '&quot;');
-      html += `<tr><td class="tool-item">${q.otherLabel} (직접 입력: <input type="text" class="tool-other-text" value="${otherText}" placeholder="도구명" oninput="window._engine.setToolOther('${q.id}', this.value)" />)</td>${checkbox(otherIdx, 'current')}${checkbox(otherIdx, 'future')}</tr>`;
+      // 기타 행은 도구명 입력 시에만 의미 있는 행이라 (다) 필요 없음 컬럼은 비활성
+      html += `<tr><td class="tool-item">${q.otherLabel} (직접 입력: <input type="text" class="tool-other-text" value="${otherText}" placeholder="도구명" oninput="window._engine.setToolOther('${q.id}', this.value)" />)</td>${checkbox(otherIdx, 'current')}${checkbox(otherIdx, 'future')}<td class="tool-cell tool-cell-disabled" aria-hidden="true"></td></tr>`;
     }
     html += '</tbody></table></div>';
     return html;
   }
 
   setToolValue(qid, idx, axis, checked) {
-    const cur = this.responses[qid] || { current: [], future: [], other_text: '' };
-    const set = new Set(cur[axis] || []);
-    if (checked) set.add(idx); else set.delete(idx);
-    cur[axis] = [...set].sort((a, b) => a - b);
+    const cur = this.responses[qid] || { current: [], future: [], none: [], other_text: '' };
+    if (!Array.isArray(cur.none)) cur.none = [];
+    const setOf = (axisName) => {
+      const s = new Set(cur[axisName] || []);
+      return s;
+    };
+    const writeBack = (axisName, set) => {
+      cur[axisName] = [...set].sort((a, b) => a - b);
+    };
+
+    const target = setOf(axis);
+    if (checked) target.add(idx); else target.delete(idx);
+    writeBack(axis, target);
+
+    // (다) 필요 없음 ↔ (가) 현재 / (나) 희망 상호배제 — 체크된 경우에만 반대편 해제
+    if (checked) {
+      const conflictAxes = axis === 'none' ? ['current', 'future'] : ['none'];
+      conflictAxes.forEach(other => {
+        const s = setOf(other);
+        if (s.has(idx)) {
+          s.delete(idx);
+          writeBack(other, s);
+          // 동일 행의 충돌 셀 체크박스만 직접 해제 (전체 리렌더 회피)
+          const table = this.container.querySelector(`.tool-matrix[data-qid="${qid}"]`);
+          const cells = table?.querySelectorAll(`tbody tr`);
+          if (cells) {
+            const totalRows = cells.length;
+            const isOtherRow = idx === (this.findQuestion(qid)?.items.length);
+            const rowIndex = isOtherRow ? totalRows - 1 : idx;
+            const row = cells[rowIndex];
+            if (row) {
+              const colIndex = other === 'current' ? 1 : (other === 'future' ? 2 : 3);
+              const cb = row.children[colIndex]?.querySelector('input[type="checkbox"]');
+              if (cb) cb.checked = false;
+            }
+          }
+        }
+      });
+    }
+
     this.responses[qid] = cur;
     this.saveResponses();
+
+    const table = this.container.querySelector(`.tool-matrix[data-qid="${qid}"]`);
+    table?.classList.remove('has-error');
+    table?.closest('.question-block')?.classList.remove('has-error');
   }
 
   setToolOther(qid, text) {
-    const cur = this.responses[qid] || { current: [], future: [], other_text: '' };
+    const cur = this.responses[qid] || { current: [], future: [], none: [], other_text: '' };
     cur.other_text = text;
     this.responses[qid] = cur;
     this.saveResponses();
@@ -1980,16 +2021,28 @@ export class SurveyEngine {
           this.showError(q.id, '모든 항목의 중요도와 체감도를 평가해 주십시오.');
         }
       } else if (q.type === Q_TYPE.TOOL_MATRIX) {
-        const hasAny = val && typeof val === 'object' && (
-          (Array.isArray(val.current) && val.current.length > 0) ||
-          (Array.isArray(val.future) && val.future.length > 0) ||
-          (val.other_text && val.other_text.trim().length > 0)
+        const cur = (val && Array.isArray(val.current)) ? val.current : [];
+        const fut = (val && Array.isArray(val.future)) ? val.future : [];
+        const none = (val && Array.isArray(val.none)) ? val.none : [];
+        const otherText = (val && val.other_text) ? val.other_text.trim() : '';
+        const otherIdx = q.items.length;
+        // 일반 도구 행: (가)·(나)·(다) 중 하나 이상
+        const baseRowsCovered = q.items.every((_, idx) =>
+          cur.includes(idx) || fut.includes(idx) || none.includes(idx)
         );
-        ok = !!hasAny;
+        // 기타 행: 도구명을 적었을 때만 (가) 또는 (나) 중 하나 이상이 필요
+        const otherRowOk = q.otherLabel && otherText
+          ? (cur.includes(otherIdx) || fut.includes(otherIdx))
+          : true;
+        ok = baseRowsCovered && otherRowOk;
         if (!ok) {
           const table = this.container.querySelector(`.tool-matrix[data-qid="${q.id}"]`);
           table?.classList.add('has-error');
-          this.showError(q.id, '현재 또는 향후 활용 도구를 하나 이상 표시해 주십시오.');
+          if (!baseRowsCovered) {
+            this.showError(q.id, '각 도구마다 (가) 현재 활용 / (나) 향후 활용 희망 / (다) 필요 없음 중 하나 이상을 표시해 주십시오.');
+          } else {
+            this.showError(q.id, '"기타"에 도구명을 입력하셨다면 (가) 또는 (나) 중 하나 이상을 표시해 주십시오.');
+          }
         }
       } else if (q.type === Q_TYPE.TEXT) {
         ok = val && val.trim().length > 0;
