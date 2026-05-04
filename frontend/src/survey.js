@@ -17,8 +17,9 @@ const GATE = {
   RESUBMIT_CHOICE: 'resubmit_choice',
   READ_ONLY: 'read_only',
   OPEN: 'open',
-  REGISTER: 'register',  // 토큰 없는 공개 진입 — 랜딩/동의/정보입력 단계 진행
-  CLOSED: 'closed',      // 4직군 합산 정원(300부) 도달 — 모든 신규/이어작성 차단
+  REGISTER: 'register',           // 토큰 없는 공개 진입 — 랜딩/동의/정보입력 단계 진행
+  IDENTITY_REQUIRED: 'identity',  // 익명 토큰(name='') — 응답 시작 전 신원(이름·휴대폰) 보강 필수
+  CLOSED: 'closed',               // 4직군 합산 정원(300부) 도달 — 모든 신규/이어작성 차단
 };
 
 // 4직군 균등 75부 = 합산 300부 (백엔드 QUOTA_PER_CATEGORY와 일치)
@@ -78,6 +79,10 @@ export class SurveyEngine {
     this.visibleSections = [];
     this.editingParticipant = false;
     this.participantFormError = '';
+    // 익명 토큰 신원 보강 폼 상태
+    this.identityDraft = { name: '', phone: '', org: '' };
+    this.identityError = '';
+    this.identitySubmitting = false;
 
     if (this.token) {
       this.verifyToken().then(async () => {
@@ -121,6 +126,14 @@ export class SurveyEngine {
         this.saveResponses();
         this.submitted = true;
         this.gate = GATE.RESUBMIT_CHOICE;
+      } else if (data.needs_identity) {
+        // 익명(name 결측) 토큰 — 응답 시작 전 신원 보강 필수.
+        this.identityDraft = {
+          name: '',
+          phone: '',
+          org: data.org || '',
+        };
+        this.gate = GATE.IDENTITY_REQUIRED;
       } else {
         this.gate = GATE.OPEN;
       }
@@ -554,6 +567,10 @@ export class SurveyEngine {
       this.renderRegister();
       return;
     }
+    if (this.gate === GATE.IDENTITY_REQUIRED) {
+      this.renderIdentityRequired();
+      return;
+    }
     if (this.gate === GATE.RESUBMIT_CHOICE) {
       this.renderResubmitChoice();
       return;
@@ -620,6 +637,113 @@ export class SurveyEngine {
         </div>
       </div>
     `;
+  }
+
+  // ── Identity Required (익명 토큰 신원 보강 게이트) ──
+  renderIdentityRequired() {
+    const m = SURVEY_META;
+    const d = this.identityDraft;
+    const errBox = this.identityError
+      ? `<div class="reg-error">${this.escape(this.identityError)}</div>`
+      : '';
+    const btnLabel = this.identitySubmitting ? '확인 중…' : '확인하고 설문 시작';
+    const btnAttr = this.identitySubmitting ? 'disabled' : '';
+    this.container.innerHTML = `
+      <div class="survey-container">
+        <div class="register-landing">
+          <div class="register-institution">${m.institution}</div>
+          <h1 class="register-title">설문 참여자 정보 확인</h1>
+          <div class="register-card">
+            <p style="margin:0 0 12px;line-height:1.7">
+              본 설문 응답 데이터의 신뢰성 확보와 사례품(스타벅스 e카드) 안내를 위해
+              <strong>이름</strong>과 <strong>휴대폰 번호</strong>를 먼저 확인합니다.
+            </p>
+            <p style="margin:0 0 16px;color:var(--c-text-secondary);font-size:13px;line-height:1.7">
+              · 한 분당 1회 응답 원칙에 따라 동일 이름·휴대폰 조합은 중복 응답이 차단됩니다.<br>
+              · 입력하신 정보는 본 연구의 응답 식별·사례품 안내 외 용도로 사용되지 않습니다.
+            </p>
+            ${errBox}
+            <div class="form-row">
+              <label>이름 <span style="color:#a04040">*</span></label>
+              <input type="text" data-identity="name" value="${this.escape(d.name || '')}" placeholder="홍길동" autocomplete="name">
+            </div>
+            <div class="form-row">
+              <label>휴대폰 번호 <span style="color:#a04040">*</span></label>
+              <input type="tel" data-identity="phone" value="${this.escape(d.phone || '')}" placeholder="010-1234-5678" autocomplete="tel">
+            </div>
+            <div class="form-row">
+              <label>소속 (선택)</label>
+              <input type="text" data-identity="org" value="${this.escape(d.org || '')}" placeholder="회사·기관명" autocomplete="organization">
+            </div>
+            <div style="margin-top:20px;text-align:center">
+              <button class="btn btn-primary" data-action="submit-identity" ${btnAttr}>${btnLabel}</button>
+            </div>
+          </div>
+          <div class="register-meta">
+            <dl>
+              <dt>조사기관</dt><dd>${m.institution}</dd>
+              <dt>연구책임</dt><dd>${m.researcher}</dd>
+              <dt>문의</dt><dd>${m.contact}</dd>
+            </dl>
+          </div>
+        </div>
+      </div>
+    `;
+    // 입력 바인딩
+    this.container.querySelectorAll('[data-identity]').forEach(el => {
+      el.addEventListener('input', (e) => {
+        const key = e.target.getAttribute('data-identity');
+        this.identityDraft[key] = e.target.value;
+      });
+    });
+    const btn = this.container.querySelector('[data-action="submit-identity"]');
+    if (btn) btn.addEventListener('click', () => this.submitIdentity());
+  }
+
+  async submitIdentity() {
+    const d = this.identityDraft;
+    const name = (d.name || '').trim();
+    const phone = (d.phone || '').trim();
+    const org = (d.org || '').trim();
+    if (!name) { this.identityError = '이름을 입력해 주십시오.'; this.render(); return; }
+    const phoneDigits = phone.replace(/\D+/g, '');
+    if (phoneDigits.length < 9) {
+      this.identityError = '연락 가능한 휴대폰 번호(숫자 9자리 이상)를 입력해 주십시오.';
+      this.render();
+      return;
+    }
+    this.identitySubmitting = true;
+    this.identityError = '';
+    this.render();
+    try {
+      const res = await fetch(`${API_BASE}/ai/api/survey/identity`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: this.token, name, phone, org }),
+      });
+      if (res.status === 409) {
+        const body = await res.json().catch(() => ({}));
+        this.identityError = body.detail || '동일한 이름·휴대폰으로 이미 등록된 응답자가 있습니다.';
+        this.identitySubmitting = false;
+        this.render();
+        return;
+      }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        this.identityError = body.detail || `요청 실패 (HTTP ${res.status})`;
+        this.identitySubmitting = false;
+        this.render();
+        return;
+      }
+      // 성공 — participant doc 다시 가져와 OPEN gate 진입.
+      this.identitySubmitting = false;
+      await this.verifyToken();
+      this.render();
+    } catch (e) {
+      this.identityError = '네트워크 오류가 발생했습니다. 잠시 후 다시 시도해 주십시오.';
+      this.identitySubmitting = false;
+      this.render();
+    }
   }
 
   // ── Register (공개 단일 링크 자가등록) ──

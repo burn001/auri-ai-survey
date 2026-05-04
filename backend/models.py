@@ -60,6 +60,18 @@ class RecoverRequest(BaseModel):
     email: str
 
 
+class IdentityFillRequest(BaseModel):
+    """익명(name 결측) 응답자가 응답 시작 시 신원을 자가 보강.
+
+    name 비어있는 participant doc 한정. (name, phone) 중복 검사 후 업데이트.
+    bulk_import_2026_05_04 로 들어온 5,321건의 FM학회 회원·법인회원사 등 익명 토큰을 위한 게이트.
+    """
+    token: str
+    name: str
+    phone: str
+    org: str = ""
+
+
 class SelfRegisterRequest(BaseModel):
     """공개 단일 링크 자가등록 페이로드.
 

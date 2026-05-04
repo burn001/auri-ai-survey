@@ -10,6 +10,7 @@ from models import (
     ParticipantUpdate,
     SelfRegisterRequest,
     RecoverRequest,
+    IdentityFillRequest,
     CommentCreateRequest,
     CommentUpdateRequest,
 )
@@ -38,6 +39,23 @@ QUOTA_PER_CATEGORY = {
 SURVEY_LIMIT = sum(QUOTA_PER_CATEGORY.values())  # 300
 
 EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+
+
+def _normalize_phone(p: str) -> str:
+    """휴대폰 번호를 숫자만 남겨 정규화. 비교·중복 검사용 키."""
+    if not p:
+        return ""
+    return re.sub(r"\D+", "", p)
+
+
+async def _find_duplicate_identity(db, name: str, phone_norm: str, exclude_token: str | None = None) -> dict | None:
+    """동일 (name, phone_normalized) 을 가진 다른 participant 가 있는지 확인."""
+    if not name or not phone_norm:
+        return None
+    query = {"name": name, "phone_normalized": phone_norm}
+    if exclude_token:
+        query["token"] = {"$ne": exclude_token}
+    return await db.participants.find_one(query, {"_id": 0, "token": 1, "name": 1, "email": 1})
 
 
 async def _completed_count_by_category(db) -> dict[str, int]:
@@ -201,7 +219,54 @@ async def verify_token(token: str):
         "comments": existing.get("comments") if existing else None,
         "submitted_at": existing.get("submitted_at").isoformat() if has_submitted else None,
         "updated_at": existing.get("updated_at").isoformat() if existing and existing.get("updated_at") else None,
+        "needs_identity": not bool((participant.get("name") or "").strip()),
     }
+
+
+@router.post("/survey/identity")
+async def fill_identity(body: IdentityFillRequest, request: Request):
+    """익명(name 결측) 응답자 신원 자가 보강.
+
+    - 토큰의 participant doc 의 name 이 비어있을 때만 동작 (이미 채워진 경우는 409).
+    - (name, phone_normalized) 가 다른 participant 와 중복이면 409 — 응답 1인 1회 보장.
+    - 성공 시 participant doc 에 name/phone/org/phone_normalized/identity_filled_at 기록.
+    """
+    db = get_db()
+    token = (body.token or "").strip()
+    name = (body.name or "").strip()
+    phone = (body.phone or "").strip()
+    org = (body.org or "").strip()
+
+    if not name:
+        raise HTTPException(400, "이름을 입력해 주십시오.")
+    phone_norm = _normalize_phone(phone)
+    if len(phone_norm) < 9:
+        raise HTTPException(400, "연락 가능한 휴대폰 번호를 입력해 주십시오.")
+
+    participant = await db.participants.find_one({"token": token})
+    if not participant:
+        raise HTTPException(404, "유효하지 않은 토큰입니다.")
+    if (participant.get("name") or "").strip():
+        raise HTTPException(409, "이미 신원이 등록된 토큰입니다. 다시 입력하실 수 없습니다.")
+
+    dup = await _find_duplicate_identity(db, name, phone_norm, exclude_token=token)
+    if dup:
+        raise HTTPException(409, "동일한 이름·휴대폰으로 이미 등록된 응답자가 있습니다. 한 분 1회만 응답해 주십시오.")
+
+    now = datetime.utcnow()
+    update_fields = {
+        "name": name,
+        "phone": phone,
+        "phone_normalized": phone_norm,
+        "identity_filled_at": now,
+        "register_ip": request.client.host if request.client else "",
+        "register_ua": request.headers.get("user-agent", ""),
+        "updated_at": now,
+    }
+    if org:
+        update_fields["org"] = org
+    await db.participants.update_one({"token": token}, {"$set": update_fields})
+    return {"status": "ok", "token": token, "name": name}
 
 
 # ── 공개 자가등록 (No Auth) ──
@@ -292,6 +357,18 @@ async def self_register(body: SelfRegisterRequest, request: Request):
             "source_action": "self_register_promote",
         })
 
+        reward_phone_clean = body.reward_phone.strip() if body.consent_reward else ""
+        phone_norm = _normalize_phone(reward_phone_clean)
+
+        # 자가등록 promote 시 (name, phone_normalized) 중복 응답자 차단.
+        if body.consent_reward and name and phone_norm:
+            dup = await _find_duplicate_identity(db, name, phone_norm, exclude_token=token)
+            if dup:
+                raise HTTPException(
+                    409,
+                    "동일한 이름·휴대폰으로 이미 등록된 응답자가 있습니다. 한 분 1회만 응답해 주십시오.",
+                )
+
         update_fields = {
             "name": name,
             "org": body.org.strip(),
@@ -307,7 +384,8 @@ async def self_register(body: SelfRegisterRequest, request: Request):
             "consent_reward": bool(body.consent_reward),
             "consent_reward_at": now if body.consent_reward else None,
             "reward_name": body.reward_name.strip() if body.consent_reward else "",
-            "reward_phone": body.reward_phone.strip() if body.consent_reward else "",
+            "reward_phone": reward_phone_clean,
+            "phone_normalized": phone_norm,
             "register_ip": ip,
             "register_ua": ua,
             "register_updated_at": now,
@@ -324,6 +402,18 @@ async def self_register(body: SelfRegisterRequest, request: Request):
 
     token = uuid.uuid4().hex[:16]
 
+    reward_phone_clean = body.reward_phone.strip() if body.consent_reward else ""
+    phone_norm = _normalize_phone(reward_phone_clean)
+
+    # 신규 자가등록 시에도 (name, phone_normalized) 중복 차단.
+    if body.consent_reward and name and phone_norm:
+        dup = await _find_duplicate_identity(db, name, phone_norm)
+        if dup:
+            raise HTTPException(
+                409,
+                "동일한 이름·휴대폰으로 이미 등록된 응답자가 있습니다. 한 분 1회만 응답해 주십시오.",
+            )
+
     doc = {
         "token": token,
         "email": email,
@@ -337,13 +427,14 @@ async def self_register(body: SelfRegisterRequest, request: Request):
         "rank": (body.rank or "").strip(),
         "duty": (body.duty or "").strip(),
         "phone": "",
+        "phone_normalized": phone_norm,
         "source": "staff" if body.is_staff else "self",
         "consent_pi": True,
         "consent_pi_at": now,
         "consent_reward": bool(body.consent_reward),
         "consent_reward_at": now if body.consent_reward else None,
         "reward_name": body.reward_name.strip() if body.consent_reward else "",
-        "reward_phone": body.reward_phone.strip() if body.consent_reward else "",
+        "reward_phone": reward_phone_clean,
         "register_ip": ip,
         "register_ua": ua,
         "register_updated_at": now,
@@ -637,6 +728,28 @@ async def submit_response(body: ResponseSubmit, request: Request):
         raise HTTPException(404, "유효하지 않은 토큰입니다.")
 
     # 토큰 보유자는 마감과 무관하게 제출·수정 허용 — 신규 점유는 self_register에서만 차단.
+
+    # 신원 게이트(/identity) 우회 방지 — 익명 토큰은 응답 제출 차단.
+    if not (participant.get("name") or "").strip():
+        raise HTTPException(409, "응답자 신원(이름·휴대폰) 입력이 먼저 필요합니다.")
+
+    # (name, phone_normalized) 동일한 다른 토큰이 이미 응답 제출했으면 차단 — 1인 1회 보장 안전망.
+    name = (participant.get("name") or "").strip()
+    phone_norm = participant.get("phone_normalized") or _normalize_phone(participant.get("phone", ""))
+    if name and phone_norm:
+        dup_p = await db.participants.find_one(
+            {"name": name, "phone_normalized": phone_norm, "token": {"$ne": body.token}},
+            {"_id": 0, "token": 1},
+        )
+        if dup_p:
+            dup_resp = await db.responses.find_one(
+                {"token": dup_p["token"], "submitted_at": {"$ne": None}}, {"_id": 1}
+            )
+            if dup_resp:
+                raise HTTPException(
+                    409,
+                    "동일한 이름·휴대폰으로 이미 응답이 제출되어 있습니다. 한 분 1회만 응답해 주십시오.",
+                )
 
     now = datetime.utcnow()
     ip = request.client.host if request.client else ""
