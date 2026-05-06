@@ -75,11 +75,12 @@ class IdentityFillRequest(BaseModel):
 class SelfRegisterRequest(BaseModel):
     """공개 단일 링크 자가등록 페이로드.
 
-    필수: email(완료 메일 발송용) + 직군(category) + 소속(org).
+    필수: email(완료 메일 발송용) + name + 직군(category) + 소속(org) + consent_pi.
     선택: 부서·직위·직급·담당업무 — 통계 분석 보조 정보.
-    사례품(consent_reward) 동의 시에만 reward_name·reward_phone 수집.
+    사례품 동의는 응답 시작 페이지(intro)에서 별도로 받는다 — 자가등록 단계에선 수집 안 함.
     """
     email: str                     # 필수 — 응답 완료 안내 메일 발송용
+    name: str = ""                 # 응답자 이름 (1인 1회 보장 키 + 사례품 안내)
     org: str = ""                  # 소속 기관·회사명
     category: str                  # "설계" | "시공" | "유지관리" | "건축행정"
     dept: str = ""
@@ -88,17 +89,17 @@ class SelfRegisterRequest(BaseModel):
     rank: str = ""
     duty: str = ""
     consent_pi: bool                  # 필수동의 — 이메일 수집·이용
-    consent_reward: bool = False      # 선택동의 — true면 reward_name/reward_phone 필요
-    reward_name: str = ""             # 사례품 동의 시 수령자명
-    reward_phone: str = ""             # 사례품 동의 시 휴대폰 번호
     is_staff: bool = False             # 직원 테스트 모드 — source='staff', 정원·분석 제외
 
 
 class ResponseSubmit(BaseModel):
     token: str
-    survey_version: str = "v11"
+    survey_version: str = "v13"
     responses: dict[str, Any]
     comments: Optional[dict[str, str]] = None  # reviewer (연구진) only
+    # 사례품 동의는 응답 시작 페이지(intro)에서 받는다. PII 분리 위해 응답 dict 와 별도 필드.
+    consent_reward: Optional[bool] = None  # None = 옛 응답 호환 (변경 없음)
+    reward_phone: Optional[str] = None
 
 
 class ResponseRecord(BaseModel):

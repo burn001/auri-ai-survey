@@ -1,4 +1,4 @@
-import { sections, Q_TYPE, SURVEY_META, SURVEY_VERSION } from './questions.js';
+import { sections, Q_TYPE, SURVEY_META, SURVEY_VERSION, REWARD_CONSENT_NOTICE, REWARD_META_LABEL } from './questions.js';
 
 const STORAGE_KEY = 'auri_survey_responses';
 const STORAGE_PAGE_KEY = 'auri_survey_page';
@@ -161,10 +161,9 @@ export class SurveyEngine {
 
   emptyRegisterDraft() {
     return {
-      email: '', org: '', category: '',
+      email: '', name: '', org: '', category: '',
       dept: '', team: '', position: '', duty: '',
-      consent_pi: false, consent_reward: false,
-      reward_name: '', reward_phone: '',
+      consent_pi: false,
     };
   }
 
@@ -655,12 +654,13 @@ export class SurveyEngine {
           <h1 class="register-title">설문 참여자 정보 확인</h1>
           <div class="register-card">
             <p style="margin:0 0 12px;line-height:1.7">
-              본 설문 응답 데이터의 신뢰성 확보와 사례품(스타벅스 e카드) 안내를 위해
+              본 설문 응답의 1인 1회 보장과 데이터 신뢰성 확보를 위해
               <strong>이름</strong>과 <strong>휴대폰 번호</strong>를 먼저 확인합니다.
             </p>
             <p style="margin:0 0 16px;color:var(--c-text-secondary);font-size:13px;line-height:1.7">
               · 한 분당 1회 응답 원칙에 따라 동일 이름·휴대폰 조합은 중복 응답이 차단됩니다.<br>
-              · 입력하신 정보는 본 연구의 응답 식별·사례품 안내 외 용도로 사용되지 않습니다.
+              · 입력하신 정보는 본 연구의 응답 식별 외 용도로 사용되지 않습니다.<br>
+              · 사례품 발송 동의는 응답 시작 페이지에서 별도로 안내드립니다.
             </p>
             ${errBox}
             <div class="form-row">
@@ -813,8 +813,8 @@ export class SurveyEngine {
 
           <div class="register-card register-reward">
             <h2>🎁 사례품 안내</h2>
-            <p>설문에 끝까지 응답해 주신 분께는 감사의 표시로 <strong>스타벅스 e카드 2만원 교환권</strong>을 발송해 드립니다.
-               (수령을 원하시는 경우 다음 단계에서 휴대폰 번호 활용에 동의해 주시기 바랍니다.)</p>
+            <p>설문에 끝까지 응답해 주신 분께는 감사의 표시로 <strong>2만원 상당 모바일 상품권</strong>을 발송해 드립니다.
+               (수령을 원하시는 경우 응답 시작 페이지에서 휴대폰 번호 활용에 동의해 주시기 바랍니다.)</p>
           </div>
 
           <div class="register-meta">
@@ -978,25 +978,10 @@ export class SurveyEngine {
             </label>
           </div>
 
-          <div class="consent-block">
-            <h3>② 선택동의 — 사례품(스타벅스 e카드 2만원 교환권) 발송 목적</h3>
-            <table class="consent-table">
-              <tbody>
-                <tr><th>수집 항목</th>
-                  <td>이름, 휴대폰 번호</td></tr>
-                <tr><th>수집·이용 목적</th>
-                  <td>설문 참여 사례품(스타벅스 e카드 2만원 교환권) 발송. <strong>분석·통계 처리에는 사용하지 않습니다.</strong></td></tr>
-                <tr><th>보유·이용 기간</th>
-                  <td>발송 완료 후 즉시 파기 (지급 분쟁 시 6개월까지 한정 보존)</td></tr>
-                <tr><th>거부 권리</th>
-                  <td>동의를 거부할 수 있으며, 거부 시 사례품 발송이 불가합니다. (설문 참여는 가능)</td></tr>
-              </tbody>
-            </table>
-            <label class="consent-check">
-              <input type="checkbox" id="reg-consent-reward" ${d.consent_reward ? 'checked' : ''}>
-              <span>사례품 발송을 위한 이름·휴대폰 번호 수집·이용에 <strong>동의합니다(선택).</strong></span>
-            </label>
-          </div>
+          <p class="register-hint" style="margin-top:8px">
+            🎁 <strong>사례품(2만원 상당 모바일 상품권) 발송용 휴대폰 번호 수집·이용 동의는 응답 시작 페이지에서 별도로 받습니다.</strong>
+            동의하지 않으셔도 설문 참여는 가능합니다.
+          </p>
 
           ${errHtml}
 
@@ -1018,10 +1003,6 @@ export class SurveyEngine {
     });
     this.container.querySelector('#reg-consent-pi')?.addEventListener('change', (e) => {
       this.regDraft.consent_pi = e.target.checked;
-      this.saveRegisterDraft();
-    });
-    this.container.querySelector('#reg-consent-reward')?.addEventListener('change', (e) => {
-      this.regDraft.consent_reward = e.target.checked;
       this.saveRegisterDraft();
     });
     this.container.querySelector('#btn-reg-next')?.addEventListener('click', () => {
@@ -1050,27 +1031,6 @@ export class SurveyEngine {
     const byCat = this.surveyStatus?.by_category || [];
     const fullCats = new Set(byCat.filter(c => c.is_full).map(c => c.category));
 
-    const rewardBlock = d.consent_reward ? `
-      <div class="register-section reward-section">
-        <h3>🎁 사례품 수령 정보 <span class="required">(선택동의 시 필수)</span></h3>
-        <p class="register-hint">사례품 발송 외 다른 목적으로는 사용되지 않습니다.</p>
-        <div class="register-grid">
-          <label>
-            <span>이름 (수령자명) *</span>
-            <input type="text" id="reg-reward-name" value="${this.escape(d.reward_name)}" placeholder="응답자 본인 또는 수령자" />
-          </label>
-          <label>
-            <span>휴대폰 번호 *</span>
-            <input type="tel" id="reg-reward-phone" value="${this.escape(d.reward_phone)}" placeholder="010-0000-0000" />
-          </label>
-        </div>
-      </div>
-    ` : `
-      <div class="register-skip-reward">
-        사례품 발송 동의를 하지 않으셨으므로 이름·휴대폰 번호는 수집하지 않습니다.
-        (이전 단계에서 동의를 추가하실 수 있습니다.)
-      </div>
-    `;
 
     const catRadio = (val, label, helper) => {
       const isFull = fullCats.has(val);
@@ -1102,12 +1062,16 @@ export class SurveyEngine {
           </p>
 
           <div class="register-section">
-            <h3>① 응답 완료 안내 받을 이메일 <span class="register-section-tag">(필수)</span></h3>
-            <p class="register-hint">제출 직후 이 주소로 응답 확인 링크가 자동 발송됩니다. 분석·통계 처리에는 사용되지 않습니다.</p>
+            <h3>① 응답자 본인 정보 <span class="register-section-tag">(필수)</span></h3>
+            <p class="register-hint">제출 직후 이메일로 응답 확인 링크가 자동 발송됩니다. 이름은 1인 1회 응답 보장과 사례품 안내에 사용되며, 분석·통계 처리에는 활용되지 않습니다.</p>
             <div class="register-grid">
-              <label class="full">
+              <label>
+                <span>이름 *</span>
+                <input type="text" id="reg-name" value="${this.escape(d.name || '')}" placeholder="홍길동" autocomplete="name" />
+              </label>
+              <label>
                 <span>이메일 *</span>
-                <input type="email" id="reg-email" value="${this.escape(d.email)}" placeholder="example@example.co.kr" />
+                <input type="email" id="reg-email" value="${this.escape(d.email)}" placeholder="example@example.co.kr" autocomplete="email" />
               </label>
             </div>
           </div>
@@ -1148,8 +1112,6 @@ export class SurveyEngine {
             </div>
           </div>
 
-          ${rewardBlock}
-
           ${errHtml}
 
           <div class="register-actions">
@@ -1174,14 +1136,13 @@ export class SurveyEngine {
         this.saveRegisterDraft();
       });
     };
+    bind('reg-name', 'name');
     bind('reg-email', 'email');
     bind('reg-org', 'org');
     bind('reg-dept', 'dept');
     bind('reg-team', 'team');
     bind('reg-position', 'position');
     bind('reg-duty', 'duty');
-    bind('reg-reward-name', 'reward_name');
-    bind('reg-reward-phone', 'reward_phone');
 
     this.container.querySelectorAll('input[name="reg-category"]').forEach(radio => {
       radio.addEventListener('change', (e) => {
@@ -1206,15 +1167,11 @@ export class SurveyEngine {
     const d = this.regDraft;
     const errors = [];
     const email = (d.email || '').trim();
+    if (!(d.name || '').trim()) errors.push('이름을 입력해 주십시오.');
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.push('올바른 이메일을 입력해 주십시오.');
     if (!d.consent_pi) errors.push('이메일 수집·이용에 동의해 주십시오 (필수).');
     if (!['설계', '시공', '유지관리', '건축행정'].includes(d.category)) errors.push('직군(설계/시공/유지관리/건축행정)을 선택해 주십시오.');
     if (!(d.org || '').trim()) errors.push('소속 기관·회사명을 입력해 주십시오.');
-    if (d.consent_reward) {
-      if (!(d.reward_name || '').trim()) errors.push('사례품 수령자명을 입력해 주십시오.');
-      const phone = (d.reward_phone || '').trim();
-      if (!phone || !/^[\d\-\s+()]{9,}$/.test(phone)) errors.push('올바른 휴대폰 번호를 입력해 주십시오.');
-    }
     if (errors.length) {
       this.regError = errors.join(' / ');
       this.render();
@@ -1229,6 +1186,7 @@ export class SurveyEngine {
     try {
       const payload = {
         email: email,
+        name: (d.name || '').trim(),
         org: (d.org || '').trim(),
         category: d.category,
         dept: (d.dept || '').trim(),
@@ -1236,9 +1194,6 @@ export class SurveyEngine {
         position: (d.position || '').trim(),
         duty: (d.duty || '').trim(),
         consent_pi: !!d.consent_pi,
-        consent_reward: !!d.consent_reward,
-        reward_name: d.consent_reward ? (d.reward_name || '').trim() : '',
-        reward_phone: d.consent_reward ? (d.reward_phone || '').trim() : '',
         is_staff: !!this.isStaffMode,
       };
       const res = await fetch(`${API_BASE}/ai/api/survey/register`, {
@@ -1560,6 +1515,13 @@ export class SurveyEngine {
       ? '응답 수정 시작하기'
       : '설문 시작하기';
 
+    const consent = !!this.responses['CONSENT_REWARD'];
+    const phone = this.responses['PHONE'] || '';
+    const N = REWARD_CONSENT_NOTICE;
+    const consentRows = N.rows.map(([k, v]) =>
+      `<tr><th>${k}</th><td>${v}</td></tr>`
+    ).join('');
+
     this.container.innerHTML = `
       ${statusBar}
       <div class="progress-bar-wrap"><div class="progress-bar-inner">
@@ -1591,18 +1553,85 @@ export class SurveyEngine {
           <dl class="intro-meta">
             <dt>소요 시간</dt><dd>${m.duration}</dd>
             <dt>비밀보장</dt><dd>모든 응답은 통계 처리 후 익명 활용</dd>
+            <dt>설문 답례품</dt><dd>${REWARD_META_LABEL}</dd>
             <dt>연구책임</dt><dd>${m.researcher} (${m.contact})</dd>
           </dl>
+        </div>
+
+        <div class="intro-card consent-block">
+          <h2>${N.title}</h2>
+          <p class="consent-intro">${N.lead}</p>
+          <table class="consent-table">
+            <tbody>${consentRows}</tbody>
+          </table>
+          <label class="consent-check">
+            <input type="checkbox" id="intro-consent" ${consent ? 'checked' : ''} />
+            <span>${N.consentLabel}</span>
+          </label>
+          <div id="intro-phone-wrap" style="${consent ? '' : 'display:none'};margin-top:12px">
+            <label style="display:block;font-size:13px;color:#374151;margin-bottom:6px">
+              휴대전화 번호 <span style="color:#dc2626">*</span>
+              <span style="font-size:11px;color:#6b7280;font-weight:400;margin-left:6px">동의 시 필수 · 발송 후 즉시 파기</span>
+            </label>
+            <input type="tel" id="intro-phone" value="${phone.replace(/"/g, '&quot;')}" placeholder="010-1234-5678"
+              style="width:100%;max-width:320px;padding:10px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:14px" />
+            <p id="intro-phone-error" style="display:none;color:#b91c1c;font-size:12px;margin-top:6px"></p>
+          </div>
         </div>
 
         <button class="btn-start" id="btn-start">${startLabel}</button>
       </div>
     `;
     this.bindParticipantEvents();
+    this.bindIntroConsentEvents();
     this.container.querySelector('#btn-start')?.addEventListener('click', () => {
+      if (!this.commitIntroConsent()) return;
       this.currentPage = 1;
       this.render();
     });
+  }
+
+  bindIntroConsentEvents() {
+    const cb = this.container.querySelector('#intro-consent');
+    const wrap = this.container.querySelector('#intro-phone-wrap');
+    const phoneInput = this.container.querySelector('#intro-phone');
+    if (!cb) return;
+    cb.addEventListener('change', () => {
+      if (cb.checked) {
+        wrap.style.display = '';
+        phoneInput?.focus();
+      } else {
+        wrap.style.display = 'none';
+        if (phoneInput) phoneInput.value = '';
+        const err = this.container.querySelector('#intro-phone-error');
+        if (err) err.style.display = 'none';
+      }
+    });
+  }
+
+  commitIntroConsent() {
+    const cb = this.container.querySelector('#intro-consent');
+    const phoneInput = this.container.querySelector('#intro-phone');
+    const errEl = this.container.querySelector('#intro-phone-error');
+    if (!cb) return true;
+    if (cb.checked) {
+      const phone = (phoneInput?.value || '').trim();
+      const re = new RegExp(REWARD_CONSENT_NOTICE.phonePattern);
+      if (!re.test(phone)) {
+        if (errEl) {
+          errEl.textContent = REWARD_CONSENT_NOTICE.phonePatternMessage;
+          errEl.style.display = '';
+        }
+        phoneInput?.focus();
+        return false;
+      }
+      this.setResponse('CONSENT_REWARD', true);
+      this.setResponse('PHONE', phone);
+    } else {
+      this.setResponse('CONSENT_REWARD', false);
+      this.setResponse('PHONE', '');
+    }
+    return true;
   }
 
   // ── Section ──
@@ -2305,13 +2334,22 @@ export class SurveyEngine {
     `;
 
     try {
+      // 사례품 동의·휴대폰은 응답 dict 에서 분리해 별도 필드로 전송 (PII 분리, small-housing 패턴)
+      const responsesPayload = { ...this.responses };
+      const consentReward = !!responsesPayload['CONSENT_REWARD'];
+      const rewardPhone = consentReward ? (responsesPayload['PHONE'] || '').trim() : '';
+      delete responsesPayload['CONSENT_REWARD'];
+      delete responsesPayload['PHONE'];
+
       const res = await fetch(`${API_BASE}/ai/api/responses`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           token: this.token,
           survey_version: SURVEY_VERSION,
-          responses: { ...this.responses },
+          responses: responsesPayload,
+          consent_reward: consentReward,
+          reward_phone: rewardPhone,
         }),
       });
 

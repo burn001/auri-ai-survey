@@ -28,6 +28,26 @@ export const SURVEY_META = {
 
 export const SURVEY_VERSION = 'v13';
 
+// 사례품 안내 + 개인정보 수집·이용 동의 (선택) — 응답 시작 페이지 intro 에서 노출.
+// invite·자가등록 응답자 모두 동일한 흐름으로 사례품 동의를 받는다 (small-housing 패턴 통일).
+// 표현은 추후 변경 가능하도록 한 곳에 집중.
+export const REWARD_CONSENT_NOTICE = {
+  title: '🎁 사례품 안내 및 개인정보 수집·이용 동의 (선택)',
+  lead: '설문에 끝까지 응답해 주신 분께는 감사의 의미로 <strong>2만원 상당 모바일 상품권</strong>을 발송해 드립니다. 수령을 원하시는 경우 아래 동의 후 휴대전화 번호를 입력해 주십시오.',
+  rows: [
+    ['수집 항목', '휴대전화 번호'],
+    ['수집·이용 목적', '설문 참여 사례품(2만원 상당 모바일 상품권) 발송. 분석·통계 처리에는 사용하지 않습니다.'],
+    ['보유·이용 기간', '발송 완료 후 즉시 파기 (지급 분쟁 발생 시 6개월까지 한정 보존)'],
+    ['거부 권리', '동의를 거부할 수 있으며, 거부 시 사례품 발송이 불가합니다. (설문 참여는 가능)'],
+  ],
+  consentLabel: '사례품 발송을 위한 휴대전화 번호 수집·이용에 <strong>동의합니다 (선택)</strong>.',
+  phonePattern: '^01[016789]-?\\d{3,4}-?\\d{4}$',
+  phonePatternMessage: '올바른 휴대전화 번호 형식으로 입력해 주십시오.',
+};
+
+// intro 메타 행에 노출할 사례품 표현
+export const REWARD_META_LABEL = '2만원 상당 모바일 상품권';
+
 // 문항 유형
 export const Q_TYPE = {
   SINGLE: 'single',

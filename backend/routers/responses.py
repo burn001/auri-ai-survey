@@ -357,13 +357,10 @@ async def fill_identity(body: IdentityFillRequest, request: Request):
 @router.post("/survey/register")
 async def self_register(body: SelfRegisterRequest, request: Request):
     """공개 단일 링크에서 응답자가 직접 정보를 입력하고 토큰을 발급받는다.
-    - email은 필수 (완료 안내 메일 발송용).
-    - 직군(category)은 4직군 중 하나. 해당 직군 정원이 충족되면 신규 등록 차단.
-    - 사례품 동의(consent_reward) 시에만 reward_name·reward_phone 수집.
+    - email·name·category·org·consent_pi 필수.
+    - 사례품 동의는 응답 시작 페이지(intro)에서 별도로 받는다 — 자가등록 단계에서 수집 안 함 (PII 분리).
     - 토큰은 random uuid. 신규 email은 새 토큰 발급.
     - imported 명단 & 미응답: 폼 입력값으로 정보 갱신 + source 전환 + 기존 토큰 노출(smooth 진입).
-      신원 사칭 방지를 위해 폼 입력값이 imported 정보를 덮어씀. 정원 검사는 건너뜀
-      (이미 명단에 있던 사람이므로 신규 점유 아님).
     - 이미 응답 완료: 차단 (재등록 의미 없음, /recover로 리뷰 링크).
     - 이미 self/staff 등록: 차단 (분실 시 /recover).
     """
@@ -374,13 +371,13 @@ async def self_register(body: SelfRegisterRequest, request: Request):
         raise HTTPException(400, "올바른 이메일을 입력해 주십시오.")
     if not body.consent_pi:
         raise HTTPException(400, "이메일 수집·이용에 동의해 주셔야 참여하실 수 있습니다.")
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(400, "이름을 입력해 주십시오.")
     if body.category not in ALLOWED_SELF_CATEGORIES:
         raise HTTPException(400, "직군(설계/시공/유지관리/건축행정)을 선택해 주십시오.")
     if not (body.org or "").strip():
         raise HTTPException(400, "소속 기관·회사명을 입력해 주십시오.")
-    if body.consent_reward:
-        if not body.reward_name.strip() or not body.reward_phone.strip():
-            raise HTTPException(400, "사례품 수령자명과 휴대폰 번호를 입력해 주십시오.")
 
     db = get_db()
     existing = await db.participants.find_one({"email": email})
@@ -420,7 +417,6 @@ async def self_register(body: SelfRegisterRequest, request: Request):
     now = datetime.utcnow()
     ip = request.client.host if request.client else ""
     ua = request.headers.get("user-agent", "")
-    name = (body.reward_name or "").strip() if body.consent_reward else ""
 
     # imported 명단 & 미응답 → 폼 입력값으로 정보 갱신 후 기존 토큰 노출 (smooth 진입).
     if existing:
@@ -440,18 +436,6 @@ async def self_register(body: SelfRegisterRequest, request: Request):
             "source_action": "self_register_promote",
         })
 
-        reward_phone_clean = body.reward_phone.strip() if body.consent_reward else ""
-        phone_norm = _normalize_phone(reward_phone_clean)
-
-        # 자가등록 promote 시 (name, phone_normalized) 중복 응답자 차단.
-        if body.consent_reward and name and phone_norm:
-            dup = await _find_duplicate_identity(db, name, phone_norm, exclude_token=token)
-            if dup:
-                raise HTTPException(
-                    409,
-                    "동일한 이름·휴대폰으로 이미 등록된 응답자가 있습니다. 한 분 1회만 응답해 주십시오.",
-                )
-
         update_fields = {
             "name": name,
             "org": body.org.strip(),
@@ -464,11 +448,6 @@ async def self_register(body: SelfRegisterRequest, request: Request):
             "source": "staff" if body.is_staff else "self",
             "consent_pi": True,
             "consent_pi_at": now,
-            "consent_reward": bool(body.consent_reward),
-            "consent_reward_at": now if body.consent_reward else None,
-            "reward_name": body.reward_name.strip() if body.consent_reward else "",
-            "reward_phone": reward_phone_clean,
-            "phone_normalized": phone_norm,
             "register_ip": ip,
             "register_ua": ua,
             "register_updated_at": now,
@@ -485,18 +464,6 @@ async def self_register(body: SelfRegisterRequest, request: Request):
 
     token = uuid.uuid4().hex[:16]
 
-    reward_phone_clean = body.reward_phone.strip() if body.consent_reward else ""
-    phone_norm = _normalize_phone(reward_phone_clean)
-
-    # 신규 자가등록 시에도 (name, phone_normalized) 중복 차단.
-    if body.consent_reward and name and phone_norm:
-        dup = await _find_duplicate_identity(db, name, phone_norm)
-        if dup:
-            raise HTTPException(
-                409,
-                "동일한 이름·휴대폰으로 이미 등록된 응답자가 있습니다. 한 분 1회만 응답해 주십시오.",
-            )
-
     doc = {
         "token": token,
         "email": email,
@@ -510,14 +477,15 @@ async def self_register(body: SelfRegisterRequest, request: Request):
         "rank": (body.rank or "").strip(),
         "duty": (body.duty or "").strip(),
         "phone": "",
-        "phone_normalized": phone_norm,
+        "phone_normalized": "",
         "source": "staff" if body.is_staff else "self",
         "consent_pi": True,
         "consent_pi_at": now,
-        "consent_reward": bool(body.consent_reward),
-        "consent_reward_at": now if body.consent_reward else None,
-        "reward_name": body.reward_name.strip() if body.consent_reward else "",
-        "reward_phone": reward_phone_clean,
+        # 사례품 관련 필드는 응답 시작 페이지(intro)에서 입력될 때 채워짐.
+        "consent_reward": False,
+        "consent_reward_at": None,
+        "reward_name": "",
+        "reward_phone": "",
         "register_ip": ip,
         "register_ua": ua,
         "register_updated_at": now,
@@ -839,6 +807,31 @@ async def submit_response(body: ResponseSubmit, request: Request):
     ua = request.headers.get("user-agent", "")
 
     comments = body.comments or {}
+
+    # 사례품 동의는 응답 시작 페이지(intro)에서 받아서 응답 제출과 함께 전송됨 — participants 갱신.
+    # body.consent_reward is None 인 경우는 옛 응답 호환을 위해 변경하지 않음.
+    if body.consent_reward is not None:
+        reward_phone_clean = (body.reward_phone or "").strip() if body.consent_reward else ""
+        phone_norm = _normalize_phone(reward_phone_clean)
+        # (name, phone_normalized) 동일한 다른 토큰이 사례품 동의했다면 차단 — 1인 1회.
+        if body.consent_reward and name and phone_norm:
+            dup = await _find_duplicate_identity(db, name, phone_norm, exclude_token=body.token)
+            if dup:
+                raise HTTPException(
+                    409,
+                    "동일한 이름·휴대폰으로 이미 등록된 응답자가 있습니다. 한 분 1회만 응답해 주십시오.",
+                )
+        reward_update = {
+            "consent_reward": bool(body.consent_reward),
+            "consent_reward_at": now if body.consent_reward else None,
+            "reward_phone": reward_phone_clean,
+            "reward_name": participant.get("name", "") if body.consent_reward else "",
+        }
+        if body.consent_reward and phone_norm:
+            reward_update["phone_normalized"] = phone_norm
+        await db.participants.update_one({"token": body.token}, {"$set": reward_update})
+        # 갱신된 participant doc 다시 사용 (완료 메일 발송 시 reward_name 활용 가능).
+        participant = await db.participants.find_one({"token": body.token}) or participant
 
     existing = await db.responses.find_one({"token": body.token})
     if existing and existing.get("submitted_at"):
