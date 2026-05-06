@@ -8,3 +8,4 @@ backend/logs/
 venv/
 __pycache__/
 backend/.env.*
+.telegram.env
