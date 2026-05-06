@@ -1286,6 +1286,19 @@ export class SurveyEngine {
     const submittedStr = this.submittedAt ? this.formatDateTime(this.submittedAt) : '';
     const updatedStr = this.updatedAt ? this.formatDateTime(this.updatedAt) : '';
 
+    // 사례품 미동의자 안내 — 응답 완료자 중 동의가 없는 경우만 노출. 연구진·직원은 정원 외라 미노출.
+    const isReviewerOrStaff = p.category === '연구진' || p.source === 'staff';
+    const rewardPending = !p.consent_reward && !isReviewerOrStaff;
+    const rewardBanner = rewardPending ? `
+      <div style="margin:18px 0 4px;padding:18px 20px;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;text-align:left">
+        <p style="margin:0 0 8px;font-weight:600;color:#92400e;font-size:15px">🎁 사례품 안내가 아직 완료되지 않았습니다</p>
+        <p style="margin:0;font-size:13px;color:#78350f;line-height:1.7">
+          사례품(2만원 모바일 상품권) 발송에는 동의와 휴대전화 번호가 필요합니다.
+          아래 <strong>[응답 수정하기]</strong>를 누르신 뒤 응답 시작 페이지의 <strong>[🎁 사례품 동의만 저장하고 끝내기]</strong> 버튼으로 1분 내에 완료하실 수 있습니다 (기존 응답은 그대로 유지됩니다).
+        </p>
+      </div>
+    ` : '';
+
     this.container.innerHTML = `
       <div class="survey-container">
         <div class="resubmit-choice">
@@ -1298,6 +1311,7 @@ export class SurveyEngine {
               ${updatedStr ? `<dt>최근 수정</dt><dd>${updatedStr}</dd>` : ''}
             </dl>
           </div>
+          ${rewardBanner}
           <p class="resubmit-msg">
             응답 내용을 <strong>수정</strong>하시거나, 제출한 응답을 <strong>확인</strong>만 하실 수 있습니다.
           </p>
@@ -1522,6 +1536,24 @@ export class SurveyEngine {
       `<tr><th>${k}</th><td>${v}</td></tr>`
     ).join('');
 
+    // 미동의 + 이미 제출 + EDIT 모드일 때만 [동의만 저장] 단축 경로 노출.
+    // reward_notice 메일 수신자가 전체 응답을 다시 넘기지 않고 한 번에 끝내도록 허용.
+    const p = this.participant || {};
+    const isReviewerOrStaff = p.category === '연구진' || p.source === 'staff';
+    const showRewardOnly = this.submitted
+      && this.editMode === EDIT_MODE.EDIT
+      && !p.consent_reward
+      && !isReviewerOrStaff;
+    const rewardOnlyBtn = showRewardOnly ? `
+      <button class="btn-start" id="btn-reward-only" style="margin-top:14px;background:#92400e">
+        🎁 사례품 동의만 저장하고 끝내기
+      </button>
+      <p style="margin:8px 0 0;font-size:12px;color:#6b7280;text-align:center;line-height:1.6">
+        위 동의 체크 + 휴대전화 번호 입력 후 클릭하시면 사례품 정보만 저장됩니다.<br>
+        기존 응답·진행 상태는 그대로 유지됩니다.
+      </p>
+    ` : '';
+
     this.container.innerHTML = `
       ${statusBar}
       <div class="progress-bar-wrap"><div class="progress-bar-inner">
@@ -1580,6 +1612,7 @@ export class SurveyEngine {
         </div>
 
         <button class="btn-start" id="btn-start">${startLabel}</button>
+        ${rewardOnlyBtn}
       </div>
     `;
     this.bindParticipantEvents();
@@ -1588,6 +1621,15 @@ export class SurveyEngine {
       if (!this.commitIntroConsent()) return;
       this.currentPage = 1;
       this.render();
+    });
+    this.container.querySelector('#btn-reward-only')?.addEventListener('click', async () => {
+      const cb = this.container.querySelector('#intro-consent');
+      if (!cb || !cb.checked) {
+        alert('사례품 수령을 원하시면 동의 체크박스를 선택하고 휴대전화 번호를 입력해 주세요.\n\n사례품을 원하지 않으시면 본 안내는 그대로 두셔도 됩니다.');
+        return;
+      }
+      if (!this.commitIntroConsent()) return;
+      await this.submitRewardConsentOnly();
     });
   }
 
@@ -2377,6 +2419,71 @@ export class SurveyEngine {
       `;
       this.container.querySelector('#btn-retry')?.addEventListener('click', () => this.submitToServer());
       this.container.querySelector('#btn-fallback')?.addEventListener('click', () => this.downloadResponses());
+    }
+  }
+
+  // 미동의자가 intro 페이지에서 [🎁 사례품 동의만 저장하고 끝내기] 버튼을 누른 경우.
+  // 응답은 건드리지 않고 participants.consent_reward + reward_phone 만 PATCH.
+  async submitRewardConsentOnly() {
+    const phone = this.responses['PHONE'] || '';
+    this.container.innerHTML = `
+      ${this.renderStatusBar()}
+      <div class="survey-container with-status-bar">
+        <div class="completion" style="padding:120px 20px">
+          <div class="spinner" style="width:40px;height:40px;border:3px solid #e0e0e0;border-top:3px solid #2c2c2c;border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 24px"></div>
+          <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+          <h2>사례품 동의를 저장하고 있습니다…</h2>
+        </div>
+      </div>
+    `;
+
+    try {
+      const res = await fetch(`${API_BASE}/ai/api/responses/${this.token}/reward-consent`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          consent_reward: true,
+          reward_phone: phone,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || `Server error: ${res.status}`);
+      }
+
+      // 동의 정보 갱신 — 새로고침 시 미동의 배너가 다시 안 뜨도록 클라이언트 상태 동기화
+      if (this.participant) this.participant.consent_reward = true;
+      this.updatedAt = new Date().toISOString();
+
+      this.container.innerHTML = `
+        ${this.renderStatusBar()}
+        <div class="survey-container with-status-bar">
+          <div class="completion">
+            <div class="completion-icon">
+              <svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            </div>
+            <h2>사례품 동의가 저장되었습니다</h2>
+            <p>입력해 주신 휴대전화 번호로 사례품(2만원 모바일 상품권)이 발송됩니다.<br/>
+            정성 어린 응답에 다시 한번 진심으로 감사드립니다.</p>
+            <p style="margin-top:24px;color:#666;font-size:13px">
+              사례품 발송용 정보는 발송 완료 후 즉시 파기됩니다.
+            </p>
+          </div>
+        </div>
+      `;
+    } catch (err) {
+      this.container.innerHTML = `
+        ${this.renderStatusBar()}
+        <div class="survey-container with-status-bar">
+          <div class="completion">
+            <h2 style="color:var(--c-error)">저장 중 오류가 발생했습니다</h2>
+            <p style="margin:16px 0">${this.escape(err.message)}</p>
+            <button class="btn btn-next" id="btn-retry-reward" style="margin:8px">다시 시도</button>
+          </div>
+        </div>
+      `;
+      this.container.querySelector('#btn-retry-reward')?.addEventListener('click',
+        () => this.submitRewardConsentOnly());
     }
   }
 

@@ -13,6 +13,7 @@ from models import (
     IdentityFillRequest,
     CommentCreateRequest,
     CommentUpdateRequest,
+    RewardConsentPatch,
 )
 from services.db import get_db
 from services.email_service import render_completion, render_email, send_email
@@ -888,6 +889,67 @@ async def submit_response(body: ResponseSubmit, request: Request):
     else:
         await _set_completion_email_state(db, token=body.token, participant=participant, status="skipped")
     return {"status": "created", "token": body.token}
+
+
+@router.patch("/responses/{token}/reward-consent")
+async def update_reward_consent(token: str, body: RewardConsentPatch):
+    """이미 응답 제출한 사람이 사례품 동의·전화번호만 갱신.
+
+    reward_notice 메일 수신자(미동의자)가 전체 응답을 다시 넘기지 않고
+    intro 페이지의 [동의만 저장하고 끝내기] 버튼으로 한 번에 완료하도록 허용.
+    응답 제출(`responses.submitted_at != None`) 전제 — 그 외 토큰은 409.
+    """
+    db = get_db()
+    participant = await db.participants.find_one({"token": token})
+    if not participant:
+        raise HTTPException(404, "유효하지 않은 토큰입니다.")
+
+    name = (participant.get("name") or "").strip()
+    if not name:
+        raise HTTPException(409, "응답자 신원이 등록되지 않은 토큰입니다.")
+
+    submitted = await db.responses.find_one(
+        {"token": token, "submitted_at": {"$ne": None}}, {"_id": 1}
+    )
+    if not submitted:
+        raise HTTPException(
+            409,
+            "응답을 먼저 제출해 주십시오. 사례품 동의는 응답 제출 시 함께 저장됩니다.",
+        )
+
+    now = datetime.utcnow()
+
+    if body.consent_reward:
+        reward_phone_clean = (body.reward_phone or "").strip()
+        phone_norm = _normalize_phone(reward_phone_clean)
+        if len(phone_norm) < 9:
+            raise HTTPException(400, "사례품 발송용 휴대폰 번호를 입력해 주십시오.")
+        # 1인 1회 — (name, phone_normalized) 동일한 다른 토큰 차단
+        dup = await _find_duplicate_identity(db, name, phone_norm, exclude_token=token)
+        if dup:
+            raise HTTPException(
+                409,
+                "동일한 이름·휴대폰으로 이미 등록된 응답자가 있습니다. 한 분 1회만 응답해 주십시오.",
+            )
+        update_fields = {
+            "consent_reward": True,
+            "consent_reward_at": now,
+            "reward_phone": reward_phone_clean,
+            "reward_name": name,
+            "phone_normalized": phone_norm,
+            "updated_at": now,
+        }
+    else:
+        update_fields = {
+            "consent_reward": False,
+            "consent_reward_at": None,
+            "reward_phone": "",
+            "reward_name": "",
+            "updated_at": now,
+        }
+
+    await db.participants.update_one({"token": token}, {"$set": update_fields})
+    return {"status": "updated", "consent_reward": bool(body.consent_reward)}
 
 
 @router.get("/responses/{token}")

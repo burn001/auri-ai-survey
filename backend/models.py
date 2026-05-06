@@ -102,6 +102,16 @@ class ResponseSubmit(BaseModel):
     reward_phone: Optional[str] = None
 
 
+class RewardConsentPatch(BaseModel):
+    """이미 응답 제출한 미동의자가 사례품 동의·연락처만 갱신할 때 사용.
+
+    reward_notice 메일 수신자가 전체 응답을 다시 넘기지 않고 한 번에 동의 정보만
+    저장하도록 허용. consent_reward=True 면 reward_phone 필수.
+    """
+    consent_reward: bool
+    reward_phone: Optional[str] = None
+
+
 class ResponseRecord(BaseModel):
     token: str
     survey_version: str
