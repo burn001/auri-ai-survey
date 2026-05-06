@@ -97,8 +97,82 @@ async def _is_survey_closed(db) -> bool:
     return all(by_cat.get(c, 0) >= q for c, q in QUOTA_PER_CATEGORY.items())
 
 
-async def _send_completion_email(participant: dict, token: str) -> None:
-    """응답 제출 직후 자동 발송. 실패해도 응답 처리는 영향받지 않음."""
+async def _set_completion_email_state(
+    db,
+    *,
+    token: str,
+    participant: dict,
+    status: str,
+    error: str = "",
+    is_resend: bool = False,
+) -> None:
+    """completion_email_states 컬렉션 단일 row를 token 기준으로 upsert.
+
+    status: 'pending' | 'sent' | 'failed' | 'skipped'.
+    'sent'/'failed' 는 시도 결과이므로 attempt_count·last_attempted_at·sent_at·last_error 갱신.
+    'pending' 은 응답 제출 직후 초기화 — 기존 row가 있으면 attempt_count·last_error 보존.
+    'skipped' 는 연구진처럼 발송 의무 자체가 없는 케이스 (idempotent).
+    """
+    now = datetime.utcnow()
+    base = {
+        "token": token,
+        "email": participant.get("email", ""),
+        "name": participant.get("name", ""),
+        "org": participant.get("org", ""),
+        "category": participant.get("category", ""),
+        "updated_at": now,
+    }
+    if status == "pending":
+        await db.completion_email_states.update_one(
+            {"token": token},
+            {
+                "$set": {**base, "status": "pending"},
+                "$setOnInsert": {
+                    "attempt_count": 0,
+                    "first_attempted_at": None,
+                    "last_attempted_at": None,
+                    "sent_at": None,
+                    "last_error": "",
+                    "created_at": now,
+                },
+            },
+            upsert=True,
+        )
+        return
+    if status == "skipped":
+        await db.completion_email_states.update_one(
+            {"token": token},
+            {
+                "$set": {**base, "status": "skipped"},
+                "$setOnInsert": {
+                    "attempt_count": 0,
+                    "first_attempted_at": None,
+                    "last_attempted_at": None,
+                    "sent_at": None,
+                    "last_error": "",
+                    "created_at": now,
+                },
+            },
+            upsert=True,
+        )
+        return
+    # status in ('sent', 'failed') — 발송 시도 결과
+    update = {
+        "$set": {**base, "status": status, "last_attempted_at": now, "last_error": error, "is_resend": is_resend},
+        "$inc": {"attempt_count": 1},
+        "$setOnInsert": {"first_attempted_at": now, "created_at": now},
+    }
+    if status == "sent":
+        update["$set"]["sent_at"] = now
+    await db.completion_email_states.update_one({"token": token}, update, upsert=True)
+
+
+async def _send_completion_email(participant: dict, token: str, *, is_resend: bool = False) -> None:
+    """응답 제출 직후 자동 발송. 실패해도 응답 처리는 영향받지 않음.
+
+    completion_email_states 에 시도 결과를 기록(token 단일 row, 상태 머신).
+    email_logs 에는 시도별 audit row 도 그대로 남겨 추후 추적 가능.
+    """
     s = get_settings()
     if not s.GMAIL_USER or not s.GMAIL_APP_PASSWORD:
         return
@@ -114,7 +188,7 @@ async def _send_completion_email(participant: dict, token: str) -> None:
     )
     now = datetime.utcnow()
     log_doc = {
-        "batch_id": "auto-completion",
+        "batch_id": "auto-completion-resend" if is_resend else "auto-completion",
         "token": token,
         "email": participant["email"],
         "name": participant.get("name", ""),
@@ -123,19 +197,28 @@ async def _send_completion_email(participant: dict, token: str) -> None:
         "type": "completion",
         "subject": subject,
         "admin_email": "system",
-        "admin_name": "자동 발송",
+        "admin_name": "재발송 스크립트" if is_resend else "자동 발송",
         "sent_at": now,
     }
     try:
         send_email(participant["email"], subject, html)
         log_doc.update({"status": "sent", "error": ""})
         await db.email_logs.insert_one(log_doc)
+        await _set_completion_email_state(
+            db, token=token, participant=participant, status="sent", is_resend=is_resend
+        )
     except Exception as e:
         err = str(e)
         logger.warning(f"Completion email failed for {participant['email']}: {err}")
         log_doc.update({"status": "failed", "error": err})
         try:
             await db.email_logs.insert_one(log_doc)
+        except Exception:
+            pass
+        try:
+            await _set_completion_email_state(
+                db, token=token, participant=participant, status="failed", error=err, is_resend=is_resend
+            )
         except Exception:
             pass
 
@@ -790,7 +873,10 @@ async def submit_response(body: ResponseSubmit, request: Request):
             {"$set": update_fields},
         )
         if participant.get("category") != "연구진":
+            await _set_completion_email_state(db, token=body.token, participant=participant, status="pending")
             await _send_completion_email(participant, body.token)
+        else:
+            await _set_completion_email_state(db, token=body.token, participant=participant, status="skipped")
         return {"status": "created", "token": body.token}
 
     record = ResponseRecord(
@@ -804,7 +890,10 @@ async def submit_response(body: ResponseSubmit, request: Request):
     )
     await db.responses.insert_one(record.model_dump())
     if participant.get("category") != "연구진":
+        await _set_completion_email_state(db, token=body.token, participant=participant, status="pending")
         await _send_completion_email(participant, body.token)
+    else:
+        await _set_completion_email_state(db, token=body.token, participant=participant, status="skipped")
     return {"status": "created", "token": body.token}
 
 
