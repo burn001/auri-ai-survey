@@ -11,6 +11,9 @@ services:
       - TZ=Asia/Seoul
     volumes:
       - ./backend/logs:/app/logs:rw
+      # scripts/는 호스트에서 read-only로 노출 — run_reward_dispatch.bat이 매번 inject 안 하고
+      # 컨테이너 내부 경로 /app/scripts/*.py 를 직접 호출. 컨테이너 재생성에도 영향 없음.
+      - ./scripts:/app/scripts:ro
     read_only: true
     tmpfs:
       - /tmp
