@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableDelayedExpansion
 REM ============================================================
-REM Reward dispatch -- schtasks scheduled
+REM Survey dispatch -- schtasks scheduled
 REM   Phase 0: telegram start notice
 REM   Phase 1: reward_notice  (responders without reward consent)
 REM   Phase 2: reward_resend  (invite recipients without response)
@@ -18,13 +18,13 @@ set REPO=D:\docker\auri-ai-survey
 set LOGDIR=%REPO%\logs
 set TS=%date:~0,4%%date:~5,2%%date:~8,2%-%time:~0,2%%time:~3,2%
 set TS=%TS: =0%
-set LOGFILE=%LOGDIR%\reward-dispatch-%TS%.log
+set LOGFILE=%LOGDIR%\survey-dispatch-%TS%.log
 
 cd /d "%REPO%"
 
 if not exist "%LOGDIR%" mkdir "%LOGDIR%"
 
-echo === [%date% %time%] reward dispatch start ===                  >> "%LOGFILE%"
+echo === [%date% %time%] survey dispatch start ===                  >> "%LOGFILE%"
 echo repo=%REPO% logfile=%LOGFILE%                                    >> "%LOGFILE%"
 echo.                                                                 >> "%LOGFILE%"
 
