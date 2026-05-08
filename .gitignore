@@ -1,11 +1,19 @@
-﻿node_modules/
+node_modules/
 frontend/dist/
 backend/__pycache__/
 backend/*.pyc
 backend/.env
+backend/.env.*
 backend/logs/
 .venv/
 venv/
 __pycache__/
-backend/.env.*
 .telegram.env
+
+# Operational data and logs (winserver runtime, not for git)
+logs/
+scripts/wave*.json
+scripts/send_log_*.json
+scripts/import_v4_candidates.csv
+*.local-backup
+*.bak
