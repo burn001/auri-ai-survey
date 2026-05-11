@@ -26,6 +26,11 @@ class Participant(BaseModel):
     # 사례품(스타벅스 e카드) 수령 정보 — 선택동의 시에만 채워짐
     reward_name: str = ""
     reward_phone: str = ""
+    # 응답 시작 마커 — 인트로 [설문 시작하기] 클릭 시 박는다. 박힌 이후엔 직군 정원이 차도 완주 보장.
+    started_at: Optional[datetime] = None
+    # 응답자가 invitation 직군과 다른 직군을 선택해서 응답 시작한 경우 변경 이력
+    category_original: str = ""
+    category_changed_at: Optional[datetime] = None
     # 자가등록 추적 메타
     register_ip: str = ""
     register_ua: str = ""
@@ -100,6 +105,22 @@ class ResponseSubmit(BaseModel):
     # 사례품 동의는 응답 시작 페이지(intro)에서 받는다. PII 분리 위해 응답 dict 와 별도 필드.
     consent_reward: Optional[bool] = None  # None = 옛 응답 호환 (변경 없음)
     reward_phone: Optional[str] = None
+
+
+class StartSurveyRequest(BaseModel):
+    """인트로 페이지의 [설문 시작하기] 버튼 클릭 시 호출.
+
+    consent_reward + reward_phone 을 participants 에 기록하고 started_at 을 박는다.
+    started_at 이 박힌 응답자는 이후 직군 정원이 마감되어도 완주가 보장된다.
+    consent_reward=True 이고 해당 직군 정원이 이미 마감된 경우 409 차단.
+
+    category: 응답자가 invitation 의 직군 분류를 본인 실제 직군으로 변경하고 싶을 때 사용.
+    None 이면 기존 participant.category 유지. 값이 들어오면 participant.category 업데이트
+    + 변경 이력(category_original, category_changed_at) 기록 후 quota 검사도 변경된 값 기준.
+    """
+    consent_reward: bool = False
+    reward_phone: Optional[str] = None
+    category: Optional[str] = None
 
 
 class RewardConsentPatch(BaseModel):

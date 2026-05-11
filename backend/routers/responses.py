@@ -14,6 +14,7 @@ from models import (
     CommentCreateRequest,
     CommentUpdateRequest,
     RewardConsentPatch,
+    StartSurveyRequest,
 )
 from services.db import get_db
 from services.email_service import render_completion, render_email, send_email
@@ -276,16 +277,25 @@ async def verify_token(token: str):
     if not participant:
         raise HTTPException(404, "유효하지 않은 설문 링크입니다.")
 
-    # 토큰을 이미 보유한 응답자는 마감과 무관하게 진입 허용 — 신규 점유는 self_register에서만 차단.
+    # 토큰 보유자도 직군 정원 마감 시 진입을 차단한다 — 단, 이미 시작했거나(started_at) 정원 외인 케이스는 통과.
+    # 실제 차단 화면 노출은 프론트에서 category_full && !already_started 로 분기.
 
     existing = await db.responses.find_one({"token": token}, {"_id": 0})
     has_submitted = bool(existing and existing.get("submitted_at"))
+    started_at = participant.get("started_at")
+    already_started = bool(started_at) or has_submitted
+
+    category = participant.get("category", "")
+    category_full = False
+    if category in QUOTA_PER_CATEGORY:
+        category_full = await _is_category_full(db, category)
+
     return {
         "token": participant["token"],
         "name": participant.get("name", ""),
         "email": participant.get("email", ""),
         "org": participant.get("org", ""),
-        "category": participant.get("category", ""),
+        "category": category,
         "field": participant.get("field", ""),
         "phone": participant.get("phone", ""),
         "dept": participant.get("dept", ""),
@@ -304,6 +314,93 @@ async def verify_token(token: str):
         "submitted_at": existing.get("submitted_at").isoformat() if has_submitted else None,
         "updated_at": existing.get("updated_at").isoformat() if existing and existing.get("updated_at") else None,
         "needs_identity": not bool((participant.get("name") or "").strip()),
+        "started_at": started_at.isoformat() if isinstance(started_at, datetime) else None,
+        "already_started": already_started,
+        "category_full": category_full,
+    }
+
+
+@router.post("/survey/{token}/start")
+async def start_survey(token: str, body: StartSurveyRequest, request: Request):
+    """인트로 [설문 시작하기] 클릭 시 호출.
+
+    - 이미 started_at 박힌 응답자 → 멱등 통과 (consent_reward/phone/category 만 갱신)
+    - body.category 가 들어오면 participant.category 를 그 값으로 변경 (변경 이력 기록)
+    - 정원 외 직군(연구진/staff/기타/미분류) → quota 검사 없이 통과
+    - consent_reward=False → 정원 카운트 대상 아니므로 통과
+    - consent_reward=True && 해당 직군 마감 → 409 차단
+    - 그 외 → started_at 박고 통과
+
+    consent_reward=True 인 경우 reward_phone 필수.
+    """
+    db = get_db()
+    participant = await db.participants.find_one({"token": token})
+    if not participant:
+        raise HTTPException(404, "유효하지 않은 설문 링크입니다.")
+
+    consent_reward = bool(body.consent_reward)
+    reward_phone = (body.reward_phone or "").strip()
+
+    if consent_reward:
+        phone_norm = _normalize_phone(reward_phone)
+        if len(phone_norm) < 9:
+            raise HTTPException(400, "사례품 발송을 위해 휴대전화 번호를 입력해 주십시오.")
+
+    already_started = bool(participant.get("started_at"))
+    is_staff = participant.get("source") == "staff"
+
+    # 응답자가 직군을 변경했는지 판정 — 게이트 검사도 변경된 직군 기준으로.
+    current_category = participant.get("category", "")
+    requested_category = (body.category or "").strip()
+    if requested_category and requested_category != current_category:
+        # 4직군 + '기타' + '미분류' 허용. 그 외 자유 문자열은 거부.
+        allowed = ALLOWED_SELF_CATEGORIES | {"기타", "미분류"}
+        if requested_category not in allowed:
+            raise HTTPException(400, "허용된 직군이 아닙니다.")
+        effective_category = requested_category
+        category_changed = True
+    else:
+        effective_category = current_category
+        category_changed = False
+
+    is_quota_category = effective_category in QUOTA_PER_CATEGORY
+
+    # 게이트: 신규 시작 + 정원 직군 + 동의 + 마감인 경우만 차단
+    if not already_started and is_quota_category and not is_staff and consent_reward:
+        if await _is_category_full(db, effective_category):
+            raise HTTPException(
+                409,
+                f"'{effective_category}' 직군 사례품 동의 응답 정원({QUOTA_PER_CATEGORY[effective_category]}부)이 모두 충족되어 신규 참여가 마감되었습니다. "
+                f"사례품을 받지 않고 응답에 참여하시려면 동의를 해제하고 다시 시작해 주십시오.",
+            )
+
+    now = datetime.utcnow()
+    update_fields = {
+        "consent_reward": consent_reward,
+        "reward_phone": reward_phone if consent_reward else "",
+    }
+    if consent_reward:
+        update_fields["consent_reward_at"] = now
+    if not already_started:
+        update_fields["started_at"] = now
+    if category_changed:
+        update_fields["category"] = effective_category
+        # category_original 은 최초 변경 시에만 기록 (역추적용)
+        if not participant.get("category_original"):
+            update_fields["category_original"] = current_category
+        update_fields["category_changed_at"] = now
+
+    await db.participants.update_one({"token": token}, {"$set": update_fields})
+
+    return {
+        "status": "started",
+        "started_at": (participant.get("started_at") or now).isoformat()
+        if isinstance(participant.get("started_at") or now, datetime)
+        else None,
+        "consent_reward": consent_reward,
+        "already_started": already_started,
+        "category": effective_category,
+        "category_changed": category_changed,
     }
 
 

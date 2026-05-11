@@ -20,6 +20,7 @@ const GATE = {
   REGISTER: 'register',           // 토큰 없는 공개 진입 — 랜딩/동의/정보입력 단계 진행
   IDENTITY_REQUIRED: 'identity',  // 익명 토큰(name='') — 응답 시작 전 신원(이름·휴대폰) 보강 필수
   CLOSED: 'closed',               // 4직군 합산 정원(300부) 도달 — 모든 신규/이어작성 차단
+  CATEGORY_FULL: 'category_full', // 토큰 보유자지만 본인 직군 정원 마감 + 미시작 — 사례품 미동의 옵션만 허용
 };
 
 // 4직군 균등 75부 = 합산 300부 (백엔드 QUOTA_PER_CATEGORY와 일치)
@@ -83,6 +84,9 @@ export class SurveyEngine {
     this.identityDraft = { name: '', phone: '', org: '' };
     this.identityError = '';
     this.identitySubmitting = false;
+    // CATEGORY_FULL 화면(사례품 정원 마감) [사례품 없이 참여] 버튼 상태
+    this.startError = '';
+    this.startSubmitting = false;
 
     if (this.token) {
       this.verifyToken().then(async () => {
@@ -121,6 +125,31 @@ export class SurveyEngine {
       this.participant = data;
       this.submittedAt = data.submitted_at || null;
       this.updatedAt = data.updated_at || null;
+
+      // 안전망: 서버에 started_at이 없지만 localStorage에 실제 설문 응답 흔적이 남아있다면
+      // (구버전 클라이언트에서 이미 작성 중이던 케이스) 마감 차단을 우회하기 위해 자동 마킹.
+      // Q6/CONSENT_REWARD/PHONE 은 인트로 단계에서 자동 채워질 수 있으므로 '진행 흔적'으로 인정하지 않는다.
+      const PROGRESS_IGNORE_KEYS = new Set(['Q6', 'CONSENT_REWARD', 'PHONE']);
+      const hasLocalProgress = Object.keys(this.responses || {}).some(k => {
+        if (PROGRESS_IGNORE_KEYS.has(k)) return false;
+        const v = this.responses[k];
+        return v !== undefined && v !== '' && !(Array.isArray(v) && v.length === 0);
+      });
+      if (!data.already_started && hasLocalProgress && !data.has_responded) {
+        try {
+          await fetch(`${API_BASE}/ai/api/survey/${this.token}/start`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              consent_reward: !!this.responses['CONSENT_REWARD'],
+              reward_phone: (this.responses['PHONE'] || '').trim(),
+            }),
+          });
+          data.already_started = true;
+          data.category_full = false;
+        } catch {}
+      }
+
       if (data.has_responded && data.responses) {
         this.responses = { ...this.responses, ...data.responses };
         this.saveResponses();
@@ -134,6 +163,9 @@ export class SurveyEngine {
           org: data.org || '',
         };
         this.gate = GATE.IDENTITY_REQUIRED;
+      } else if (data.category_full && !data.already_started) {
+        // 본인 직군 사례품 정원이 마감되었고 아직 시작 전 — 사례품 없이 참여 옵션만 제공.
+        this.gate = GATE.CATEGORY_FULL;
       } else {
         this.gate = GATE.OPEN;
       }
@@ -558,6 +590,10 @@ export class SurveyEngine {
       this.renderClosed();
       return;
     }
+    if (this.gate === GATE.CATEGORY_FULL) {
+      this.renderCategoryFull();
+      return;
+    }
     if (this.gate === GATE.DENIED) {
       this.renderAccessDenied();
       return;
@@ -636,6 +672,91 @@ export class SurveyEngine {
         </div>
       </div>
     `;
+  }
+
+  // ── Category Full (토큰 보유자지만 본인 직군 사례품 정원 마감) ──
+  renderCategoryFull() {
+    const m = SURVEY_META;
+    const p = this.participant || {};
+    const cat = p.category || '';
+    const errBox = this.startError
+      ? `<div class="reg-error" style="margin:0 0 16px">${this.escape(this.startError)}</div>`
+      : '';
+    const btnDisabled = this.startSubmitting ? 'disabled' : '';
+    const btnLabel = this.startSubmitting ? '진행 중…' : '사례품 없이 연구에 참여하기';
+    this.container.innerHTML = `
+      <div class="survey-container">
+        <div class="register-landing">
+          <div class="register-institution">${m.institution}</div>
+          <h1 class="register-title">사례품 정원이 마감되었습니다</h1>
+          <div class="register-card" style="padding:32px 24px">
+            <p style="font-size:16px;line-height:1.8;margin:0 0 12px">
+              <strong>${this.escape(cat)}</strong> 직군의 사례품 발송 정원(75부)이 모두 충족되어
+              사례품과 함께하는 신규 참여가 마감되었습니다.
+            </p>
+            <p style="margin:0 0 12px;color:var(--c-text-secondary);line-height:1.7">
+              다만 본 연구에서는 직군별 응답 다양성을 위해
+              <strong>사례품 없이도 연구에 참여해 주시는 것</strong>을 환영합니다.
+              응답 내용은 정책 분석에 동일하게 반영됩니다.
+            </p>
+            ${errBox}
+            <div style="margin-top:20px;text-align:center">
+              <button class="btn btn-primary" data-action="start-without-reward" ${btnDisabled}>${btnLabel}</button>
+            </div>
+            <p style="margin:14px 0 0;font-size:12px;color:var(--c-text-secondary);text-align:center;line-height:1.7">
+              버튼을 누르시면 사례품 동의 없이 설문 페이지로 이동합니다.<br>
+              응답 도중 사례품 신청은 가능하지 않으며, 정원에 영향을 주지 않습니다.
+            </p>
+          </div>
+          <div class="register-meta">
+            <dl>
+              <dt>조사기관</dt><dd>${m.institution}</dd>
+              <dt>연구책임</dt><dd>${m.researcher}</dd>
+              <dt>문의</dt><dd>${m.contact}</dd>
+            </dl>
+          </div>
+        </div>
+      </div>
+    `;
+    this.container.querySelector('[data-action="start-without-reward"]')
+      ?.addEventListener('click', () => this.startWithoutReward());
+  }
+
+  async startWithoutReward() {
+    this.startSubmitting = true;
+    this.startError = '';
+    this.render();
+    try {
+      const res = await fetch(`${API_BASE}/ai/api/survey/${this.token}/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ consent_reward: false, reward_phone: '' }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        this.startError = body.detail || `요청 실패 (HTTP ${res.status})`;
+        this.startSubmitting = false;
+        this.render();
+        return;
+      }
+      // 사례품 미동의 상태로 응답 시작 — 인트로의 동의 체크박스 끄고 OPEN gate 진입.
+      this.responses['CONSENT_REWARD'] = false;
+      this.responses['PHONE'] = '';
+      this.saveResponses();
+      if (this.participant) {
+        this.participant.consent_reward = false;
+        this.participant.reward_phone = '';
+        this.participant.already_started = true;
+        this.participant.category_full = false;
+      }
+      this.startSubmitting = false;
+      this.gate = GATE.OPEN;
+      this.render();
+    } catch {
+      this.startError = '네트워크 오류가 발생했습니다. 잠시 후 다시 시도해 주십시오.';
+      this.startSubmitting = false;
+      this.render();
+    }
   }
 
   // ── Identity Required (익명 토큰 신원 보강 게이트) ──
@@ -1540,6 +1661,34 @@ export class SurveyEngine {
     // reward_notice 메일 수신자가 전체 응답을 다시 넘기지 않고 한 번에 끝내도록 허용.
     const p = this.participant || {};
     const isReviewerOrStaff = p.category === '연구진' || p.source === 'staff';
+
+    // 본인 직군 확인 카드 — 연구진/staff/이미 제출 완료자는 변경 옵션 노출하지 않음.
+    // (이미 제출했으면 직군은 그 시점에 확정된 분류이므로 사후 변경 차단)
+    const allowCategoryChange = !isReviewerOrStaff && !this.submitted;
+    const categoryOptions = ['설계', '시공', '유지관리', '건축행정', '기타'];
+    const currentCat = p.category || '';
+    const categorySelectHtml = allowCategoryChange ? `
+      <div class="intro-card">
+        <h2>본인 직군 확인</h2>
+        <p style="margin:0 0 12px;color:#374151;line-height:1.7;font-size:14px">
+          귀하의 응답이 분석 결과에 정확하게 반영되도록 본인 직군을 한 번 더 확인해 주십시오.
+          ${currentCat ? `사전 분류는 <strong>${this.escape(currentCat)}</strong>입니다.` : ''}
+          실제 직군과 다르다면 아래에서 변경해 주세요.
+        </p>
+        <label style="display:block;font-size:13px;color:#374151;margin-bottom:6px">
+          직군 <span style="color:#dc2626">*</span>
+        </label>
+        <select id="intro-category" style="width:100%;max-width:260px;padding:10px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;background:#fff">
+          ${categoryOptions.map(c => `
+            <option value="${c}" ${c === currentCat ? 'selected' : ''}>${c}</option>
+          `).join('')}
+          ${categoryOptions.includes(currentCat) ? '' : `<option value="${this.escape(currentCat)}" selected>${this.escape(currentCat) || '(미분류)'}</option>`}
+        </select>
+        <p style="margin:8px 0 0;font-size:12px;color:#6b7280;line-height:1.6">
+          ※ 4직군(설계·시공·유지관리·건축행정)은 각 직군별로 사례품 정원(75부)이 별도로 운영됩니다.
+        </p>
+      </div>
+    ` : '';
     const showRewardOnly = this.submitted
       && this.editMode === EDIT_MODE.EDIT
       && !p.consent_reward
@@ -1590,6 +1739,8 @@ export class SurveyEngine {
           </dl>
         </div>
 
+        ${categorySelectHtml}
+
         <div class="intro-card consent-block">
           <h2>${N.title}</h2>
           <p class="consent-intro">${N.lead}</p>
@@ -1617,10 +1768,69 @@ export class SurveyEngine {
     `;
     this.bindParticipantEvents();
     this.bindIntroConsentEvents();
-    this.container.querySelector('#btn-start')?.addEventListener('click', () => {
+    this.container.querySelector('#btn-start')?.addEventListener('click', async () => {
       if (!this.commitIntroConsent()) return;
-      this.currentPage = 1;
-      this.render();
+
+      // 인트로의 직군 드롭다운 선택값. 변경 옵션을 노출하지 않은 케이스(이미 제출/연구진/staff)는 null.
+      const catSelect = this.container.querySelector('#intro-category');
+      const selectedCategory = catSelect ? (catSelect.value || '').trim() : '';
+
+      // 토큰 보유자도 직군 정원 마감 시 차단 — /start 가 게이트 역할.
+      // 이미 started_at 박힌 사람은 멱등 통과, 마감된 직군 + 신규 + 동의 조합만 409.
+      const startBtn = this.container.querySelector('#btn-start');
+      if (startBtn) { startBtn.disabled = true; }
+      try {
+        const reqBody = {
+          consent_reward: !!this.responses['CONSENT_REWARD'],
+          reward_phone: (this.responses['PHONE'] || '').trim(),
+        };
+        if (selectedCategory) reqBody.category = selectedCategory;
+        const res = await fetch(`${API_BASE}/ai/api/survey/${this.token}/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(reqBody),
+        });
+        if (res.status === 409) {
+          // 직군 마감 — 사례품 미동의 옵션 화면으로 전환. participant.category 도 선택값으로 동기화.
+          this.gate = GATE.CATEGORY_FULL;
+          if (this.participant) {
+            this.participant.category_full = true;
+            this.participant.already_started = false;
+            if (selectedCategory) this.participant.category = selectedCategory;
+          }
+          this.render();
+          return;
+        }
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          alert(body.detail || `설문 시작 요청에 실패했습니다 (HTTP ${res.status}).`);
+          if (startBtn) { startBtn.disabled = false; }
+          return;
+        }
+        const respData = await res.json().catch(() => ({}));
+        const newCategory = respData.category || selectedCategory || (this.participant?.category || '');
+        if (this.participant) {
+          this.participant.already_started = true;
+          this.participant.consent_reward = !!this.responses['CONSENT_REWARD'];
+          this.participant.reward_phone = (this.responses['PHONE'] || '').trim();
+          this.participant.category = newCategory;
+        }
+        // 직군이 바뀌었으면 Q6 자동 채움도 새 직군 인덱스로 동기화 — PART III 분기 일관성 유지.
+        const newQ6 = CATEGORY_TO_Q6_INDEX[newCategory];
+        if (newQ6 !== undefined && this.responses['Q6'] !== newQ6) {
+          this.responses['Q6'] = newQ6;
+          this.saveResponses();
+        } else if (newQ6 === undefined && this.responses['Q6'] !== undefined) {
+          // 정원 외 직군(기타 등)으로 변경 시 자동 Q6 매핑이 없으므로 비워둔다 — 응답자가 1페이지에서 직접 선택.
+          delete this.responses['Q6'];
+          this.saveResponses();
+        }
+        this.currentPage = 1;
+        this.render();
+      } catch {
+        alert('네트워크 오류가 발생했습니다. 잠시 후 다시 시도해 주십시오.');
+        if (startBtn) { startBtn.disabled = false; }
+      }
     });
     this.container.querySelector('#btn-reward-only')?.addEventListener('click', async () => {
       const cb = this.container.querySelector('#intro-consent');

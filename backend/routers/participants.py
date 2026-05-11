@@ -44,10 +44,21 @@ async def get_stats(admin: dict = Depends(verify_admin_token)):
             "foreignField": "token",
             "as": "resp",
         }},
+        {"$addFields": {
+            "has_submitted": {"$gt": [{"$size": submitted_filter}, 0]},
+            "is_reward_consented": {
+                "$and": [
+                    {"$gt": [{"$size": submitted_filter}, 0]},
+                    {"$eq": ["$consent_reward", True]},
+                    {"$ne": ["$source", "staff"]},
+                ]
+            },
+        }},
         {"$group": {
             "_id": "$category",
             "participants": {"$sum": 1},
-            "responded": {"$sum": {"$cond": [{"$gt": [{"$size": submitted_filter}, 0]}, 1, 0]}},
+            "responded": {"$sum": {"$cond": ["$has_submitted", 1, 0]}},
+            "reward_consented": {"$sum": {"$cond": ["$is_reward_consented", 1, 0]}},
         }},
         {"$sort": {"_id": 1}},
     ]
@@ -58,12 +69,17 @@ async def get_stats(admin: dict = Depends(verify_admin_token)):
         by_category[cat] = {
             "participants": doc["participants"],
             "responded": doc["responded"],
+            "reward_consented": doc.get("reward_consented", 0),
         }
+
+    # 4직군 정원(75부) 정보 함께 노출 — 대시보드 보조 라벨용
+    quota_per_category = {"설계": 75, "시공": 75, "유지관리": 75, "건축행정": 75}
 
     return {
         "total_participants": total_p,
         "total_responses": total_r,
         "by_category": by_category,
+        "quota_per_category": quota_per_category,
     }
 
 
