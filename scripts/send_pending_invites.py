@@ -11,17 +11,25 @@ Exit codes: 0=완료, 2=한도 abort, 3=err
 """
 import asyncio
 import json
+import re
 import sys
 import time
 import urllib.request
 import urllib.error
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, '/app')
 sys.stdout.reconfigure(encoding='utf-8')
 
 from services.db import connect, disconnect, get_db
+
+
+# Gmail SMTP quota 시그널 (5.4.5 Daily user sending limit / quota).
+# 이 패턴이 errors에 나타나면 abort + 다음 실행으로 이연.
+QUOTA_PAT = re.compile(r'5\.4\.5|Daily user sending|Daily limit|quota', re.I)
+# 영구 invalid (RFC 5321 위반) — 그 token만 email_invalid 표시하고 계속.
+INVALID_ADDR_PAT = re.compile(r'5\.1\.3|RFC 5321|not a valid', re.I)
 
 
 ADMIN_TOKEN = '3fa144ea17463b30fd4652a9'
@@ -102,11 +110,31 @@ async def main() -> int:
             failed_total += failed
             skipped_total += skipped
             print(f'  status={status} sent={sent} failed={failed} skipped={skipped} (cum sent={sent_total} failed={failed_total})', flush=True)
+
+            invalid_tokens = []
+            quota_seen = False
             if errors:
                 print(f'  errors (first 3): {errors[:3]}', flush=True)
-            if status != 200 or failed > 0 or sent < len(batch) - skipped:
+                for e in errors:
+                    err_str = str(e.get('error', ''))
+                    if INVALID_ADDR_PAT.search(err_str):
+                        invalid_tokens.append(e.get('token'))
+                    if QUOTA_PAT.search(err_str):
+                        quota_seen = True
+                if invalid_tokens:
+                    await db.participants.update_many(
+                        {'token': {'$in': invalid_tokens}},
+                        {'$set': {'email_invalid': True,
+                                  'email_invalid_at': datetime.now(timezone.utc),
+                                  'email_invalid_reason': 'auto: RFC 5321 invalid (during dispatch)'}},
+                    )
+                    print(f'  auto-flagged email_invalid: {len(invalid_tokens)} tokens — abort 트리거에서 제외, 다음 batch 계속', flush=True)
+
+            unexplained_failed = failed - len(invalid_tokens)
+            if status != 200 or quota_seen or unexplained_failed > 0:
                 aborted = True
-                print(f'[ABORT] partial/failure — Gmail 한도 추정. 다음 실행 시 dedup으로 자동 이어집니다.', flush=True)
+                cause = 'quota' if quota_seen else (f'status {status}' if status != 200 else f'unexplained {unexplained_failed} failed')
+                print(f'[ABORT] {cause} — 다음 실행 시 dedup으로 자동 이어집니다.', flush=True)
                 break
         except urllib.error.HTTPError as e:
             body_text = e.read().decode('utf-8', errors='replace')
