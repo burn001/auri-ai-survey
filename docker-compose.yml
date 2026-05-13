@@ -53,6 +53,9 @@ services:
     networks:
       - mongodb
     restart: unless-stopped
+    # api 이미지의 HEALTHCHECK는 /api/health curl인데 watcher엔 http server가 없어 의미 없음
+    healthcheck:
+      disable: true
 
 networks:
   mongodb:
