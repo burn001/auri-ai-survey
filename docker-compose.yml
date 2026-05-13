@@ -29,6 +29,31 @@ services:
       retries: 3
       start_period: 10s
 
+  auri-survey-watcher:
+    # 응답자 수 10명(MILESTONE_STEP) 단위 도달 시 텔레그램 보고하는 데몬.
+    # api와 동일 이미지 재사용 — build cache 적중으로 추가 빌드 비용 없음.
+    build:
+      context: ./backend
+    container_name: auri-survey-watcher
+    command: ["python", "/app/scripts/watch_response_milestones.py"]
+    env_file:
+      - ./backend/.env
+      - ./.telegram.env
+    environment:
+      - TZ=Asia/Seoul
+      - MILESTONE_STEP=10
+      - POLL_INTERVAL_SEC=60
+    volumes:
+      - ./scripts:/app/scripts:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - mongodb
+    restart: unless-stopped
+
 networks:
   mongodb:
     external: true
