@@ -35,14 +35,6 @@ const REG_STEP = {
 
 const REGISTER_DRAFT_KEY = 'auri_ai_register_draft';
 
-// Q6 직군 옵션 텍스트 → 자가등록 category 값으로 매핑하기 위한 인덱스
-const CATEGORY_TO_Q6_INDEX = {
-  '설계': 0,
-  '시공': 1,
-  '유지관리': 2,
-  '건축행정': 3,
-};
-
 const EDIT_MODE = {
   NEW: 'new',
   EDIT: 'edit',
@@ -169,15 +161,8 @@ export class SurveyEngine {
       } else {
         this.gate = GATE.OPEN;
       }
-      // 자가등록자(또는 import 시 이미 분류된) category가 4직군 중 하나면
-      // Q6 응답을 자동 채워 분기 흐름을 즉시 활성화한다.
-      if (this.responses['Q6'] === undefined) {
-        const idx = CATEGORY_TO_Q6_INDEX[data.category];
-        if (idx !== undefined) {
-          this.responses['Q6'] = idx;
-          this.saveResponses();
-        }
-      }
+      // Q6는 응답자가 PART I에서 직접 선택해야 한다(자동채움 제거 — 라우팅은 본인 응답 기준).
+      // P_BY.category는 invitation 분류·정원 산정 라벨로만 사용.
     } catch {
       this.gate = GATE.DENIED;
     }
@@ -1667,31 +1652,7 @@ export class SurveyEngine {
 
     // 본인 직군 확인 카드 — 연구진/staff/이미 제출 완료자는 변경 옵션 노출하지 않음.
     // (이미 제출했으면 직군은 그 시점에 확정된 분류이므로 사후 변경 차단)
-    const allowCategoryChange = !isReviewerOrStaff && !this.submitted;
-    const categoryOptions = ['설계', '시공', '유지관리', '건축행정', '기타'];
-    const currentCat = p.category || '';
-    const categorySelectHtml = allowCategoryChange ? `
-      <div class="intro-card">
-        <h2>본인 직군 확인</h2>
-        <p style="margin:0 0 12px;color:#374151;line-height:1.7;font-size:14px">
-          귀하의 응답이 분석 결과에 정확하게 반영되도록 본인 직군을 한 번 더 확인해 주십시오.
-          ${currentCat ? `사전 분류는 <strong>${this.escape(currentCat)}</strong>입니다.` : ''}
-          실제 직군과 다르다면 아래에서 변경해 주세요.
-        </p>
-        <label style="display:block;font-size:13px;color:#374151;margin-bottom:6px">
-          직군 <span style="color:#dc2626">*</span>
-        </label>
-        <select id="intro-category" style="width:100%;max-width:260px;padding:10px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;background:#fff">
-          ${categoryOptions.map(c => `
-            <option value="${c}" ${c === currentCat ? 'selected' : ''}>${c}</option>
-          `).join('')}
-          ${categoryOptions.includes(currentCat) ? '' : `<option value="${this.escape(currentCat)}" selected>${this.escape(currentCat) || '(미분류)'}</option>`}
-        </select>
-        <p style="margin:8px 0 0;font-size:12px;color:#6b7280;line-height:1.6">
-          ※ 4직군(설계·시공·유지관리·건축행정)은 각 직군별로 사례품 정원(75부)이 별도로 운영됩니다.
-        </p>
-      </div>
-    ` : '';
+    // 인트로의 "본인 직군 확인" 드롭다운은 제거. 직군은 PART I Q6에서 응답자가 직접 선택한다.
     const showRewardOnly = this.submitted
       && this.editMode === EDIT_MODE.EDIT
       && !p.consent_reward
@@ -1742,8 +1703,6 @@ export class SurveyEngine {
           </dl>
         </div>
 
-        ${categorySelectHtml}
-
         <div class="intro-card consent-block">
           <h2>${N.title}</h2>
           <p class="consent-intro">${N.lead}</p>
@@ -1774,32 +1733,25 @@ export class SurveyEngine {
     this.container.querySelector('#btn-start')?.addEventListener('click', async () => {
       if (!this.commitIntroConsent()) return;
 
-      // 인트로의 직군 드롭다운 선택값. 변경 옵션을 노출하지 않은 케이스(이미 제출/연구진/staff)는 null.
-      const catSelect = this.container.querySelector('#intro-category');
-      const selectedCategory = catSelect ? (catSelect.value || '').trim() : '';
-
-      // 토큰 보유자도 직군 정원 마감 시 차단 — /start 가 게이트 역할.
-      // 이미 started_at 박힌 사람은 멱등 통과, 마감된 직군 + 신규 + 동의 조합만 409.
+      // 직군 확정·quota 차단은 PART I Q6 응답 시점에 별도 endpoint에서 처리(Phase 2~3).
+      // 인트로 /start는 사례품 동의·휴대폰 저장 + started_at 마킹만 담당.
       const startBtn = this.container.querySelector('#btn-start');
       if (startBtn) { startBtn.disabled = true; }
       try {
-        const reqBody = {
-          consent_reward: !!this.responses['CONSENT_REWARD'],
-          reward_phone: (this.responses['PHONE'] || '').trim(),
-        };
-        if (selectedCategory) reqBody.category = selectedCategory;
         const res = await fetch(`${API_BASE}/ai/api/survey/${this.token}/start`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(reqBody),
+          body: JSON.stringify({
+            consent_reward: !!this.responses['CONSENT_REWARD'],
+            reward_phone: (this.responses['PHONE'] || '').trim(),
+          }),
         });
         if (res.status === 409) {
-          // 직군 마감 — 사례품 미동의 옵션 화면으로 전환. participant.category 도 선택값으로 동기화.
+          // invitation 분류 직군이 이미 마감된 케이스 — 사례품 미동의 옵션 화면으로 전환.
           this.gate = GATE.CATEGORY_FULL;
           if (this.participant) {
             this.participant.category_full = true;
             this.participant.already_started = false;
-            if (selectedCategory) this.participant.category = selectedCategory;
           }
           this.render();
           return;
@@ -1810,23 +1762,10 @@ export class SurveyEngine {
           if (startBtn) { startBtn.disabled = false; }
           return;
         }
-        const respData = await res.json().catch(() => ({}));
-        const newCategory = respData.category || selectedCategory || (this.participant?.category || '');
         if (this.participant) {
           this.participant.already_started = true;
           this.participant.consent_reward = !!this.responses['CONSENT_REWARD'];
           this.participant.reward_phone = (this.responses['PHONE'] || '').trim();
-          this.participant.category = newCategory;
-        }
-        // 직군이 바뀌었으면 Q6 자동 채움도 새 직군 인덱스로 동기화 — PART III 분기 일관성 유지.
-        const newQ6 = CATEGORY_TO_Q6_INDEX[newCategory];
-        if (newQ6 !== undefined && this.responses['Q6'] !== newQ6) {
-          this.responses['Q6'] = newQ6;
-          this.saveResponses();
-        } else if (newQ6 === undefined && this.responses['Q6'] !== undefined) {
-          // 정원 외 직군(기타 등)으로 변경 시 자동 Q6 매핑이 없으므로 비워둔다 — 응답자가 1페이지에서 직접 선택.
-          delete this.responses['Q6'];
-          this.saveResponses();
         }
         this.currentPage = 1;
         this.render();
