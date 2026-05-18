@@ -123,6 +123,19 @@ class StartSurveyRequest(BaseModel):
     category: Optional[str] = None
 
 
+class SelectCategoryRequest(BaseModel):
+    """PART I Q6 응답 시점에 호출 — 본인 직군 확정 + 사례품 quota 체크 + 차단 마킹.
+
+    - 응답자가 Q6에서 선택한 직군을 participant.category 에 반영(필요 시 변경 이력 기록).
+    - consent_reward=True && Q6 직군 quota 마감 → 409 차단 + participants/responses 에
+      quota_blocked* 마킹. partial_responses(Q1~Q6)를 responses 컬렉션에 보존하되
+      submitted_at=null 로 유지 (분석 대상 제외, 차단 사실 추적용).
+    - consent_reward=False 거나 staff 면 quota 무관 통과.
+    """
+    category: str
+    partial_responses: dict[str, Any] = Field(default_factory=dict)
+
+
 class RewardConsentPatch(BaseModel):
     """이미 응답 제출한 미동의자가 사례품 동의·연락처만 갱신할 때 사용.
 

@@ -15,6 +15,7 @@ from models import (
     CommentUpdateRequest,
     RewardConsentPatch,
     StartSurveyRequest,
+    SelectCategoryRequest,
 )
 from services.db import get_db
 from services.email_service import render_completion, render_email, send_email
@@ -317,6 +318,8 @@ async def verify_token(token: str):
         "started_at": started_at.isoformat() if isinstance(started_at, datetime) else None,
         "already_started": already_started,
         "category_full": category_full,
+        "quota_blocked": bool(participant.get("quota_blocked_at")),
+        "quota_blocked_category": participant.get("quota_blocked_category", ""),
     }
 
 
@@ -401,6 +404,87 @@ async def start_survey(token: str, body: StartSurveyRequest, request: Request):
         "already_started": already_started,
         "category": effective_category,
         "category_changed": category_changed,
+    }
+
+
+@router.post("/survey/{token}/select-category")
+async def select_category(token: str, body: SelectCategoryRequest, request: Request):
+    """PART I Q6 응답 시점 호출 — 본인 직군 확정 + quota 체크 + 차단 마킹 (atomic).
+
+    정책:
+    - Q6 직군이 4직군 외(연구진/staff 시나리오 또는 잘못된 값)이면 400.
+    - consent_reward=True 이면서 staff 가 아닌 응답자가 마감된 4직군을 선택한 경우:
+        · participants 에 quota_blocked_at / quota_blocked_category 기록
+        · partial_responses(Q1~Q6 등)가 같이 오면 responses 컬렉션에 보존 (submitted_at=null + quota_blocked=true)
+        · 409 차단 — frontend 는 모달 안내 + 응답 종료
+    - quota 통과면 participant.category 를 Q6 응답값으로 갱신
+      (기존 invitation 분류와 다르면 category_original / category_changed_at 기록).
+    """
+    db = get_db()
+    participant = await db.participants.find_one({"token": token})
+    if not participant:
+        raise HTTPException(404, "유효하지 않은 설문 링크입니다.")
+
+    category = (body.category or "").strip()
+    if category not in QUOTA_PER_CATEGORY:
+        raise HTTPException(400, "허용된 직군이 아닙니다 (4직군 중 선택).")
+
+    # 이미 차단된 응답자가 재진입한 경우 즉시 동일 차단 응답 — 멱등.
+    if participant.get("quota_blocked_at"):
+        raise HTTPException(
+            409,
+            f"'{participant.get('quota_blocked_category') or category}' 직군 사례품 정원이 마감되어 응답이 종료된 상태입니다.",
+        )
+
+    is_staff = participant.get("source") == "staff"
+    consent_reward = bool(participant.get("consent_reward"))
+    now = datetime.utcnow()
+
+    # quota 체크 — 사례품 동의 + 비 staff 만 차단 대상.
+    if consent_reward and not is_staff and await _is_category_full(db, category):
+        await db.participants.update_one(
+            {"token": token},
+            {"$set": {
+                "quota_blocked_at": now,
+                "quota_blocked_category": category,
+            }},
+        )
+        partial = body.partial_responses or {}
+        if partial:
+            await db.responses.update_one(
+                {"token": token},
+                {"$set": {
+                    "token": token,
+                    "responses": partial,
+                    "quota_blocked": True,
+                    "quota_blocked_category": category,
+                    "quota_blocked_at": now,
+                    "submitted_at": None,
+                    "ip": request.client.host if request.client else "",
+                    "user_agent": request.headers.get("user-agent", ""),
+                }},
+                upsert=True,
+            )
+        raise HTTPException(
+            409,
+            f"'{category}' 직군 사례품 응답 정원({QUOTA_PER_CATEGORY[category]}부)이 모두 충족되어 신규 참여가 마감되었습니다.",
+        )
+
+    # quota 통과 — participant.category 갱신.
+    current_category = participant.get("category", "")
+    update_fields = {}
+    if category != current_category:
+        update_fields["category"] = category
+        if not participant.get("category_original"):
+            update_fields["category_original"] = current_category
+        update_fields["category_changed_at"] = now
+    if update_fields:
+        await db.participants.update_one({"token": token}, {"$set": update_fields})
+
+    return {
+        "status": "ok",
+        "category": category,
+        "category_changed": bool(update_fields),
     }
 
 
