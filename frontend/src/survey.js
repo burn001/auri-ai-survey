@@ -576,7 +576,10 @@ export class SurveyEngine {
     const q6 = this.responses['Q6'];
     this.visibleSections = sections.filter(s => {
       if (!s.showWhen) return true;
-      return q6 !== undefined && q6 === s.showWhen.value;
+      // Q6 값이 자동채움(int)·사용자 직접선택(falsy 0 → str '0' 함정) 두 경로로 저장될 수 있어
+      // 타입 무관 비교가 필수. strict 비교는 사용자 직접선택 시 분기 누락을 유발.
+      if (q6 === undefined || q6 === null || q6 === '') return false;
+      return Number(q6) === Number(s.showWhen.value);
     });
   }
 
@@ -2247,7 +2250,10 @@ export class SurveyEngine {
             if (type === 'radio') {
               list.querySelectorAll('.option-item').forEach(oi => oi.classList.remove('selected'));
               item.classList.add('selected');
-              this.setResponse(qid, parseInt(input.value) || input.value);
+              // parseInt('0') = 0 (falsy) → `|| input.value` 폴백이 string '0' 저장 → 분기 strict 비교 실패의 원인.
+              // NaN 명시 체크로 옵션 인덱스 0도 정수로 정확히 저장.
+              const parsed = parseInt(input.value, 10);
+              this.setResponse(qid, Number.isNaN(parsed) ? input.value : parsed);
             } else {
               item.classList.toggle('selected', input.checked);
               this.collectMultiResponse(qid, list, q);
