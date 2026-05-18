@@ -21,6 +21,7 @@ const GATE = {
   IDENTITY_REQUIRED: 'identity',  // 익명 토큰(name='') — 응답 시작 전 신원(이름·휴대폰) 보강 필수
   CLOSED: 'closed',               // 4직군 합산 정원(300부) 도달 — 모든 신규/이어작성 차단
   CATEGORY_FULL: 'category_full', // 토큰 보유자지만 본인 직군 정원 마감 + 미시작 — 사례품 미동의 옵션만 허용
+  QUOTA_BLOCKED: 'quota_blocked', // PART I Q6에서 본인 직군 quota 마감 차단 — 응답 종료 (사례품 없이 참여 옵션 미제공)
 };
 
 // 4직군 균등 75부 = 합산 300부 (백엔드 QUOTA_PER_CATEGORY와 일치)
@@ -142,7 +143,11 @@ export class SurveyEngine {
         } catch {}
       }
 
-      if (data.has_responded && data.responses) {
+      if (data.quota_blocked) {
+        // Q6 직군 quota 마감으로 이미 차단된 응답자 — 재진입 시 즉시 종료 화면.
+        this.quotaBlockedCategory = data.quota_blocked_category || '';
+        this.gate = GATE.QUOTA_BLOCKED;
+      } else if (data.has_responded && data.responses) {
         this.responses = { ...this.responses, ...data.responses };
         this.saveResponses();
         this.submitted = true;
@@ -582,6 +587,10 @@ export class SurveyEngine {
       this.renderCategoryFull();
       return;
     }
+    if (this.gate === GATE.QUOTA_BLOCKED) {
+      this.renderQuotaBlocked();
+      return;
+    }
     if (this.gate === GATE.DENIED) {
       this.renderAccessDenied();
       return;
@@ -708,6 +717,39 @@ export class SurveyEngine {
     `;
     this.container.querySelector('[data-action="start-without-reward"]')
       ?.addEventListener('click', () => this.startWithoutReward());
+  }
+
+  renderQuotaBlocked() {
+    const m = SURVEY_META;
+    const cat = this.quotaBlockedCategory || this.participant?.quota_blocked_category || '';
+    this.container.innerHTML = `
+      <div class="survey-container">
+        <div class="register-landing">
+          <div class="register-institution">${m.institution}</div>
+          <h1 class="register-title">사례품 정원이 마감되어 응답이 종료되었습니다</h1>
+          <div class="register-card" style="padding:32px 24px">
+            <p style="font-size:16px;line-height:1.8;margin:0 0 12px">
+              선택하신 <strong>${this.escape(cat)}</strong> 직군의 사례품 발송 정원(75부)이
+              모두 충족되어 신규 참여가 마감되었습니다.
+            </p>
+            <p style="margin:0 0 12px;color:var(--c-text-secondary);line-height:1.7">
+              본 직군은 더 이상 응답을 받지 않으며, 응답이 자동으로 종료되었습니다.
+              참여 의향을 표명해 주신 점 깊이 감사드립니다.
+            </p>
+            <p style="margin:0 0 4px;color:var(--c-text-secondary);line-height:1.7;font-size:13px">
+              문의 사항이 있으시면 아래 연락처로 알려주시기 바랍니다.
+            </p>
+          </div>
+          <div class="register-meta">
+            <dl>
+              <dt>조사기관</dt><dd>${m.institution}</dd>
+              <dt>연구책임</dt><dd>${m.researcher}</dd>
+              <dt>문의</dt><dd>${m.contact}</dd>
+            </dl>
+          </div>
+        </div>
+      </div>
+    `;
   }
 
   async startWithoutReward() {
@@ -2150,12 +2192,58 @@ export class SurveyEngine {
       this.render();
     });
 
-    this.container.querySelector('#btn-next')?.addEventListener('click', () => {
-      if (this.validateSection(section)) {
-        this.currentPage++;
-        this.updateVisibleSections();
-        this.render();
+    this.container.querySelector('#btn-next')?.addEventListener('click', async () => {
+      if (!this.validateSection(section)) return;
+
+      // PART I 페이지(Q6 포함)를 떠날 때 — 본인 직군 확정 + quota 체크.
+      // 409 차단되면 quota_blocked 화면으로 전환하고 응답 종료.
+      const hasQ6 = (section.questions || []).some(q => q.id === 'Q6');
+      if (hasQ6) {
+        const q6Value = this.responses['Q6'];
+        const Q6_CATEGORY = ['설계', '시공', '유지관리', '건축행정'];
+        const category = (typeof q6Value === 'number' && q6Value >= 0 && q6Value < 4)
+          ? Q6_CATEGORY[q6Value]
+          : null;
+        if (category) {
+          const btnNext = this.container.querySelector('#btn-next');
+          if (btnNext) { btnNext.disabled = true; }
+          try {
+            const res = await fetch(`${API_BASE}/ai/api/survey/${this.token}/select-category`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                category,
+                partial_responses: this.responses,
+              }),
+            });
+            if (res.status === 409) {
+              this.quotaBlockedCategory = category;
+              this.gate = GATE.QUOTA_BLOCKED;
+              this.render();
+              return;
+            }
+            if (!res.ok) {
+              const body = await res.json().catch(() => ({}));
+              alert(body.detail || `직군 확인 요청에 실패했습니다 (HTTP ${res.status}).`);
+              if (btnNext) { btnNext.disabled = false; }
+              return;
+            }
+            const data = await res.json().catch(() => ({}));
+            if (this.participant && data.category) {
+              this.participant.category = data.category;
+            }
+          } catch {
+            alert('네트워크 오류가 발생했습니다. 잠시 후 다시 시도해 주십시오.');
+            const btnNext2 = this.container.querySelector('#btn-next');
+            if (btnNext2) { btnNext2.disabled = false; }
+            return;
+          }
+        }
       }
+
+      this.currentPage++;
+      this.updateVisibleSections();
+      this.render();
     });
 
     this.container.querySelector('#btn-skip')?.addEventListener('click', () => {
