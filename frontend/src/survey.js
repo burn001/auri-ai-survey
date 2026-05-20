@@ -28,6 +28,11 @@ const GATE = {
 // 4직군 균등 75부 = 합산 300부 (백엔드 QUOTA_PER_CATEGORY와 일치)
 const SURVEY_LIMIT = 300;
 
+// 인트로 직군 드롭다운에서 확정한 카테고리를 Q6 자기응답 인덱스로 매핑.
+// backend Q6_INDEX_TO_CATEGORY(설계:0, 시공:1, 유지관리:2, 건축행정:3)의 역매핑.
+// 누락 시 /start 통과 후 ReferenceError → catch 분기 → 본문 진입 차단 (5/20 09:46 KST 장애).
+const CATEGORY_TO_Q6_INDEX = { '설계': 0, '시공': 1, '유지관리': 2, '건축행정': 3 };
+
 const REG_STEP = {
   LANDING: 'landing',
   CONSENT: 'consent',
