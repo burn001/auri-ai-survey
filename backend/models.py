@@ -95,6 +95,7 @@ class SelfRegisterRequest(BaseModel):
     duty: str = ""
     consent_pi: bool                  # 필수동의 — 이메일 수집·이용
     is_staff: bool = False             # 직원 테스트 모드 — source='staff', 정원·분석 제외
+    accept_no_reward: bool = False    # 정원 마감 직군에 사례품 자발 포기로 등록 의사 표시
 
 
 class ResponseSubmit(BaseModel):
@@ -134,6 +135,18 @@ class SelectCategoryRequest(BaseModel):
     """
     category: str
     partial_responses: dict[str, Any] = Field(default_factory=dict)
+
+
+class WaiveRewardRequest(BaseModel):
+    """정원 마감으로 차단된 응답자가 사례품을 자발 포기하고 참여를 결정할 때 호출.
+
+    - participant.quota_blocked_at 이 박힌 상태에서만 동작 (그 외엔 409).
+    - consent_reward 강제 False, reward_phone 초기화.
+    - participants 에 quota_waived=true, quota_waived_category, quota_waived_at 마킹.
+    - participants.quota_blocked_at / quota_blocked_category 는 추적 목적 보존.
+    - responses 컬렉션의 quota_blocked=true 마킹은 제거 (재진입 시 신규 응답으로 진행).
+    """
+    category: str  # 차단 시점 직군 (확인용)
 
 
 class RewardConsentPatch(BaseModel):

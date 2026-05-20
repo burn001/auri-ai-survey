@@ -16,6 +16,7 @@ from models import (
     RewardConsentPatch,
     StartSurveyRequest,
     SelectCategoryRequest,
+    WaiveRewardRequest,
 )
 from services.db import get_db
 from services.email_service import render_completion, render_email, send_email
@@ -61,11 +62,19 @@ async def _find_duplicate_identity(db, name: str, phone_norm: str, exclude_token
     return await db.participants.find_one(query, {"_id": 0, "token": 1, "name": 1, "email": 1})
 
 
+Q6_INDEX_TO_CATEGORY = {0: "설계", 1: "시공", 2: "유지관리", 3: "건축행정"}
+
+
 async def _completed_count_by_category(db) -> dict[str, int]:
     """category별 사례품 동의 응답 수 (연구진·직원 테스트 제외). QUOTA_PER_CATEGORY 4개 키만 보장.
-    정원의 정의: consent_reward=true 인 응답 완료자만 카운트. 미동의자는 정원 외."""
+    정원의 정의: consent_reward=true 인 응답 완료자만 카운트. 미동의자는 정원 외.
+    분류 기준: 응답자 Q6 자기응답(`responses.Q6`)을 4직군에 매핑. 인트로 드롭다운에서 박은
+    값이 곧 Q6이므로 participants.category 와 일치하지만, Q6 자기응답이 단일 출처."""
     pipeline = [
-        {"$match": {"submitted_at": {"$ne": None}}},
+        {"$match": {
+            "submitted_at": {"$ne": None},
+            "responses.Q6": {"$in": [0, 1, 2, 3]},
+        }},
         {"$lookup": {
             "from": "participants",
             "localField": "token",
@@ -74,15 +83,16 @@ async def _completed_count_by_category(db) -> dict[str, int]:
         }},
         {"$unwind": "$p"},
         {"$match": {
-            "p.category": {"$in": list(QUOTA_PER_CATEGORY.keys())},
             "p.source": {"$ne": "staff"},
             "p.consent_reward": True,
         }},
-        {"$group": {"_id": "$p.category", "count": {"$sum": 1}}},
+        {"$group": {"_id": "$responses.Q6", "count": {"$sum": 1}}},
     ]
     by_cat = {k: 0 for k in QUOTA_PER_CATEGORY}
     async for doc in db.responses.aggregate(pipeline):
-        by_cat[doc["_id"]] = doc["count"]
+        cat = Q6_INDEX_TO_CATEGORY.get(doc["_id"])
+        if cat in by_cat:
+            by_cat[cat] = doc["count"]
     return by_cat
 
 
@@ -320,6 +330,8 @@ async def verify_token(token: str):
         "category_full": category_full,
         "quota_blocked": bool(participant.get("quota_blocked_at")),
         "quota_blocked_category": participant.get("quota_blocked_category", ""),
+        "quota_waived": bool(participant.get("quota_waived")),
+        "quota_waived_category": participant.get("quota_waived_category", ""),
     }
 
 
@@ -367,17 +379,32 @@ async def start_survey(token: str, body: StartSurveyRequest, request: Request):
         category_changed = False
 
     is_quota_category = effective_category in QUOTA_PER_CATEGORY
+    already_waived = bool(participant.get("quota_waived"))
+    now = datetime.utcnow()
 
-    # 게이트: 신규 시작 + 정원 직군 + 동의 + 마감인 경우만 차단
+    # 게이트: 신규 시작 + 정원 직군 + 동의 + 마감인 경우만 차단.
+    # 이미 사례품 자발 포기를 결정한 응답자(quota_waived=true)는 정원 검사 건너뛴다 — 그러나
+    # consent_reward=true 로 재시도하는 모순 상태는 차단(클라이언트가 동의 자동 해제해야 함).
     if not already_started and is_quota_category and not is_staff and consent_reward:
-        if await _is_category_full(db, effective_category):
+        if already_waived:
             raise HTTPException(
                 409,
-                f"'{effective_category}' 직군 사례품 동의 응답 정원({QUOTA_PER_CATEGORY[effective_category]}부)이 모두 충족되어 신규 참여가 마감되었습니다. "
-                f"사례품을 받지 않고 응답에 참여하시려면 동의를 해제하고 다시 시작해 주십시오.",
+                "이미 사례품을 포기하고 참여를 결정하신 응답자입니다. 사례품 동의를 해제하고 다시 시작해 주십시오.",
+            )
+        if await _is_category_full(db, effective_category):
+            # quota_blocked* 마킹 (멱등 — 이미 박혀 있어도 덮어쓰기 무해)
+            await db.participants.update_one(
+                {"token": token},
+                {"$set": {
+                    "quota_blocked_at": now,
+                    "quota_blocked_category": effective_category,
+                }},
+            )
+            raise HTTPException(
+                409,
+                f"'{effective_category}' 직군 사례품 동의 응답 정원({QUOTA_PER_CATEGORY[effective_category]}부)이 모두 충족되어 신규 참여가 마감되었습니다.",
             )
 
-    now = datetime.utcnow()
     update_fields = {
         "consent_reward": consent_reward,
         "reward_phone": reward_phone if consent_reward else "",
@@ -488,6 +515,59 @@ async def select_category(token: str, body: SelectCategoryRequest, request: Requ
     }
 
 
+@router.post("/survey/{token}/waive-reward")
+async def waive_reward(token: str, body: WaiveRewardRequest):
+    """정원 마감 차단 화면에서 사례품 자발 포기 + 응답 참여를 결정한 응답자 처리.
+
+    - participants.quota_blocked_at 이 박혀 있어야 호출 가능 (그 외 409).
+    - consent_reward=False 강제 + reward_phone 초기화.
+    - quota_waived=true / quota_waived_category / quota_waived_at 마킹.
+    - quota_blocked_at / quota_blocked_category 는 추적 목적 보존 (이력).
+    - 기존 responses.quota_blocked=true partial 응답이 있으면 제거 (재진입 시 신규 시작).
+    """
+    db = get_db()
+    participant = await db.participants.find_one({"token": token})
+    if not participant:
+        raise HTTPException(404, "유효하지 않은 설문 링크입니다.")
+
+    if not participant.get("quota_blocked_at"):
+        raise HTTPException(
+            409,
+            "정원 차단 상태가 아닙니다. 본 경로는 사례품 정원 마감으로 차단된 응답자만 사용 가능합니다.",
+        )
+
+    category = (body.category or "").strip()
+    blocked_cat = participant.get("quota_blocked_category", "")
+    # 차단 시점 직군 검증 — 클라이언트가 화면에서 본 직군과 서버 기록 일치 확인.
+    if category and blocked_cat and category != blocked_cat:
+        raise HTTPException(400, "차단 시점 직군과 요청 직군이 일치하지 않습니다.")
+
+    now = datetime.utcnow()
+    await db.participants.update_one(
+        {"token": token},
+        {"$set": {
+            "consent_reward": False,
+            "reward_phone": "",
+            "quota_waived": True,
+            "quota_waived_category": blocked_cat or category,
+            "quota_waived_at": now,
+        }},
+    )
+    # 차단 시 저장된 partial 응답이 있으면 제거 — 재진입 시 신규 응답 흐름으로 진행.
+    # (응답자 입장에서 "여기서부터 시작" 일관성 + DB 정합성)
+    await db.responses.delete_one({
+        "token": token,
+        "submitted_at": None,
+        "quota_blocked": True,
+    })
+
+    return {
+        "status": "waived",
+        "category": blocked_cat or category,
+        "quota_waived_at": now.isoformat(),
+    }
+
+
 @router.post("/survey/identity")
 async def fill_identity(body: IdentityFillRequest, request: Request):
     """익명(name 결측) 응답자 신원 자가 보강.
@@ -584,6 +664,9 @@ async def self_register(body: SelfRegisterRequest, request: Request):
 
     # 직원 테스트(is_staff=true) + imported promote는 정원·마감 검사 모두 건너뜀.
     # 정원의 정의: 사례품 동의(consent_reward=true) + 응답 완료자.
+    # 정원 마감 직군은 두 단계 처리: accept_no_reward=False → 1차 quota_full 응답으로 자발 포기 옵션 안내.
+    # accept_no_reward=True → 토큰 발급 + quota_waived=true 마킹 (사례품 없이 참여 결정).
+    self_register_quota_waived = False
     if not body.is_staff and not existing:
         if await _is_survey_closed(db):
             raise HTTPException(
@@ -591,10 +674,19 @@ async def self_register(body: SelfRegisterRequest, request: Request):
                 f"설문 사례품 동의 응답 정원이 모두 충족되어 신규 참여가 마감되었습니다. (4직군 합산 {SURVEY_LIMIT}부 도달)",
             )
         if await _is_category_full(db, body.category):
-            raise HTTPException(
-                409,
-                f"'{body.category}' 직군 사례품 동의 응답 정원({QUOTA_PER_CATEGORY[body.category]}부)이 충족되어 신규 참여가 마감되었습니다.",
-            )
+            if not body.accept_no_reward:
+                # 1차 안내 — frontend 가 자발 포기 옵션 화면으로 전환할 수 있도록 정상 응답으로 반환.
+                return {
+                    "status": "quota_full",
+                    "category": body.category,
+                    "quota": QUOTA_PER_CATEGORY[body.category],
+                    "message": (
+                        f"'{body.category}' 직군 사례품 동의 응답 정원({QUOTA_PER_CATEGORY[body.category]}부)이 "
+                        f"충족되어 신규 사례품 참여가 마감되었습니다."
+                    ),
+                }
+            # accept_no_reward=True → quota_waived 토큰 발급으로 이어진다.
+            self_register_quota_waived = True
 
     now = datetime.utcnow()
     ip = request.client.host if request.client else ""
@@ -673,12 +765,17 @@ async def self_register(body: SelfRegisterRequest, request: Request):
         "register_updated_at": now,
         "created_at": now,
     }
+    if self_register_quota_waived:
+        doc["quota_waived"] = True
+        doc["quota_waived_category"] = body.category
+        doc["quota_waived_at"] = now
     await db.participants.insert_one(doc)
 
     return {
-        "status": "created",
+        "status": "created_waived" if self_register_quota_waived else "created",
         "token": token,
         "survey_url": f"{s.SURVEY_BASE_URL}/?token={token}",
+        "quota_waived": self_register_quota_waived,
     }
 
 

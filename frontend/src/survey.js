@@ -143,8 +143,25 @@ export class SurveyEngine {
         } catch {}
       }
 
-      if (data.quota_blocked) {
-        // Q6 직군 quota 마감으로 이미 차단된 응답자 — 재진입 시 즉시 종료 화면.
+      if (data.quota_waived) {
+        // 정원 마감 후 사례품을 자발 포기하고 참여 결정한 응답자 — 멱등 OPEN 진입.
+        // 동의 체크박스/휴대전화 입력은 인트로에서 자동 잠금(미동의 고정).
+        this.participant = this.participant || {};
+        this.participant.quota_waived = true;
+        this.participant.quota_waived_category = data.quota_waived_category || '';
+        this.participant.consent_reward = false;
+        this.responses['CONSENT_REWARD'] = false;
+        this.responses['PHONE'] = '';
+        if (data.has_responded && data.responses) {
+          this.responses = { ...this.responses, ...data.responses };
+          this.saveResponses();
+          this.submitted = true;
+          this.gate = GATE.RESUBMIT_CHOICE;
+        } else {
+          this.gate = GATE.OPEN;
+        }
+      } else if (data.quota_blocked) {
+        // 정원 마감 차단된 응답자 — 재진입 시 1차 차단 화면 (사례품 포기 옵션 다시 제시).
         this.quotaBlockedCategory = data.quota_blocked_category || '';
         this.gate = GATE.QUOTA_BLOCKED;
       } else if (data.has_responded && data.responses) {
@@ -160,14 +177,13 @@ export class SurveyEngine {
           org: data.org || '',
         };
         this.gate = GATE.IDENTITY_REQUIRED;
-      } else if (data.category_full && !data.already_started) {
-        // 본인 직군 사례품 정원이 마감되었고 아직 시작 전 — 사례품 없이 참여 옵션만 제공.
-        this.gate = GATE.CATEGORY_FULL;
       } else {
+        // category_full(사전 분류 기반 사전 차단) 분기 제거 — 인트로 드롭다운에서 본인 직군을
+        // 명시 선택한 시점에 /start 가 게이트로 동작. 정확한 차단 판정은 그 경로로 일원화.
         this.gate = GATE.OPEN;
       }
-      // Q6는 응답자가 PART I에서 직접 선택해야 한다(자동채움 제거 — 라우팅은 본인 응답 기준).
-      // P_BY.category는 invitation 분류·정원 산정 라벨로만 사용.
+      // Q6는 인트로 드롭다운에서 확정한 직군으로 자동 입력되고 본문 readonly.
+      // P_BY.category는 invitation 분류·발송 라벨, Q6 자기응답이 분석/정원 GT.
     } catch {
       this.gate = GATE.DENIED;
     }
@@ -722,23 +738,63 @@ export class SurveyEngine {
   renderQuotaBlocked() {
     const m = SURVEY_META;
     const cat = this.quotaBlockedCategory || this.participant?.quota_blocked_category || '';
+    const terminated = !!this.quotaTerminated;
+    const waiving = !!this.quotaWaiveSubmitting;
+    const waiveError = this.quotaWaiveError || '';
+
+    // 종료(terminated) 결정한 응답자 — 재진입 차단 메시지만 표시.
+    if (terminated) {
+      this.container.innerHTML = `
+        <div class="survey-container">
+          <div class="register-landing">
+            <div class="register-institution">${m.institution}</div>
+            <h1 class="register-title">응답이 종료되었습니다</h1>
+            <div class="register-card" style="padding:32px 24px">
+              <p style="font-size:16px;line-height:1.8;margin:0 0 12px">
+                선택하신 <strong>${this.escape(cat)}</strong> 직군의 사례품 정원 마감으로
+                응답이 종료되었습니다. 참여 의향을 표명해 주신 점 깊이 감사드립니다.
+              </p>
+              <p style="margin:0 0 4px;color:var(--c-text-secondary);line-height:1.7;font-size:13px">
+                문의 사항이 있으시면 아래 연락처로 알려주시기 바랍니다.
+              </p>
+            </div>
+            <div class="register-meta">
+              <dl>
+                <dt>조사기관</dt><dd>${m.institution}</dd>
+                <dt>연구책임</dt><dd>${m.researcher}</dd>
+                <dt>문의</dt><dd>${m.contact}</dd>
+              </dl>
+            </div>
+          </div>
+        </div>
+      `;
+      return;
+    }
+
+    // 1차 차단 화면 — 사례품 자발 포기 옵션 제시.
     this.container.innerHTML = `
       <div class="survey-container">
         <div class="register-landing">
           <div class="register-institution">${m.institution}</div>
-          <h1 class="register-title">사례품 정원이 마감되어 응답이 종료되었습니다</h1>
+          <h1 class="register-title">사례품 응답 정원 마감 안내</h1>
           <div class="register-card" style="padding:32px 24px">
-            <p style="font-size:16px;line-height:1.8;margin:0 0 12px">
+            <p style="font-size:16px;line-height:1.8;margin:0 0 14px">
               선택하신 <strong>${this.escape(cat)}</strong> 직군의 사례품 발송 정원(75부)이
-              모두 충족되어 신규 참여가 마감되었습니다.
+              모두 충족되어 사례품 동의 신규 참여가 마감되었습니다.
             </p>
-            <p style="margin:0 0 12px;color:var(--c-text-secondary);line-height:1.7">
-              본 직군은 더 이상 응답을 받지 않으며, 응답이 자동으로 종료되었습니다.
-              참여 의향을 표명해 주신 점 깊이 감사드립니다.
-            </p>
-            <p style="margin:0 0 4px;color:var(--c-text-secondary);line-height:1.7;font-size:13px">
-              문의 사항이 있으시면 아래 연락처로 알려주시기 바랍니다.
-            </p>
+            <div style="background:#f9fafb;border-left:3px solid #4f46e5;padding:14px 16px;margin:0 0 16px;border-radius:4px">
+              <p style="margin:0 0 8px;font-weight:600;color:#1f2937">사례품 없이 본 설문에 참여하실 수 있습니다.</p>
+              <p style="margin:0;font-size:14px;color:#374151;line-height:1.7">
+                응답 결과는 정책 연구의 분석 표본으로 그대로 반영됩니다. 다만 사례품은 발송되지 않습니다.
+              </p>
+            </div>
+            ${waiveError ? `<p style="color:#b91c1c;font-size:13px;margin:0 0 12px">${this.escape(waiveError)}</p>` : ''}
+            <button class="btn-start" id="btn-waive-reward" ${waiving ? 'disabled' : ''} style="width:100%;margin:0 0 10px">
+              ${waiving ? '처리 중…' : '사례품을 포기하고 응답 참여'}
+            </button>
+            <button class="btn-start" id="btn-terminate-survey" ${waiving ? 'disabled' : ''} style="width:100%;background:#6b7280">
+              응답하지 않고 종료
+            </button>
           </div>
           <div class="register-meta">
             <dl>
@@ -750,6 +806,70 @@ export class SurveyEngine {
         </div>
       </div>
     `;
+    this.container.querySelector('#btn-waive-reward')?.addEventListener('click', () => this.waiveRewardAndStart(cat));
+    this.container.querySelector('#btn-terminate-survey')?.addEventListener('click', () => {
+      this.quotaTerminated = true;
+      this.render();
+    });
+  }
+
+  // 사례품 자발 포기 + 응답 참여 결정. waive-reward POST 후 /start 재호출(미동의 모드)로 진입.
+  async waiveRewardAndStart(category) {
+    this.quotaWaiveSubmitting = true;
+    this.quotaWaiveError = '';
+    this.render();
+    try {
+      const wRes = await fetch(`${API_BASE}/ai/api/survey/${this.token}/waive-reward`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category }),
+      });
+      if (!wRes.ok) {
+        const b = await wRes.json().catch(() => ({}));
+        this.quotaWaiveError = b.detail || `사례품 포기 처리에 실패했습니다 (HTTP ${wRes.status}).`;
+        this.quotaWaiveSubmitting = false;
+        this.render();
+        return;
+      }
+      const wData = await wRes.json().catch(() => ({}));
+
+      // /start 재호출 — 미동의 모드로 진입. backend 가 quota_waived=true 인지하고 정원 검사 면제.
+      const sRes = await fetch(`${API_BASE}/ai/api/survey/${this.token}/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ consent_reward: false, reward_phone: '', category: wData.category || category }),
+      });
+      if (!sRes.ok) {
+        const b = await sRes.json().catch(() => ({}));
+        this.quotaWaiveError = b.detail || `응답 시작에 실패했습니다 (HTTP ${sRes.status}).`;
+        this.quotaWaiveSubmitting = false;
+        this.render();
+        return;
+      }
+
+      this.responses['CONSENT_REWARD'] = false;
+      this.responses['PHONE'] = '';
+      // Q6 자기응답에 차단 직군 인덱스 박음 — 본문 readonly 표시.
+      const q6Idx = CATEGORY_TO_Q6_INDEX[wData.category || category];
+      if (q6Idx !== undefined) this.responses['Q6'] = q6Idx;
+      this.saveResponses();
+      if (this.participant) {
+        this.participant.consent_reward = false;
+        this.participant.reward_phone = '';
+        this.participant.already_started = true;
+        this.participant.quota_waived = true;
+        this.participant.quota_waived_category = wData.category || category;
+        if (wData.category || category) this.participant.category = wData.category || category;
+      }
+      this.quotaWaiveSubmitting = false;
+      this.gate = GATE.OPEN;
+      this.currentPage = 1;
+      this.render();
+    } catch {
+      this.quotaWaiveError = '네트워크 오류가 발생했습니다. 잠시 후 다시 시도해 주십시오.';
+      this.quotaWaiveSubmitting = false;
+      this.render();
+    }
   }
 
   async startWithoutReward() {
@@ -1186,11 +1306,13 @@ export class SurveyEngine {
     const catRadio = (val, label, helper) => {
       const isFull = fullCats.has(val);
       const checked = d.category === val ? 'checked' : '';
-      const disabled = isFull ? 'disabled' : '';
-      const tag = isFull ? '<span style="margin-left:6px;color:#a04040;font-size:12px">· 정원 마감</span>' : '';
+      // 마감 직군이라도 사례품 포기 옵트인 흐름으로 선택 허용 — disabled 제거, 안내 텍스트로 표시.
+      const tag = isFull
+        ? '<span style="margin-left:6px;color:#a04040;font-size:12px">· 사례품 정원 마감 (사례품 없이 참여 가능)</span>'
+        : '';
       return `
-        <label class="register-radio ${isFull ? 'is-disabled' : ''}">
-          <input type="radio" name="reg-category" value="${val}" ${checked} ${disabled}>
+        <label class="register-radio">
+          <input type="radio" name="reg-category" value="${val}" ${checked}>
           <span><strong>${label}</strong>${tag}<br><small style="color:var(--c-text-secondary)">${helper}</small></span>
         </label>
       `;
@@ -1346,6 +1468,7 @@ export class SurveyEngine {
         duty: (d.duty || '').trim(),
         consent_pi: !!d.consent_pi,
         is_staff: !!this.isStaffMode,
+        accept_no_reward: !!this.regAcceptNoReward,
       };
       const res = await fetch(`${API_BASE}/ai/api/survey/register`, {
         method: 'POST',
@@ -1387,7 +1510,28 @@ export class SurveyEngine {
         throw new Error(err.detail || `등록 실패 (${res.status})`);
       }
       const data = await res.json();
+
+      // 정원 마감 안내 — 사례품 자발 포기 옵트인 confirm.
+      if (data.status === 'quota_full') {
+        this.regSubmitting = false;
+        const ok = window.confirm(
+          `${data.message || ''}\n\n` +
+          '사례품을 포기하고 본 설문에 참여하시겠습니까?\n' +
+          '응답 결과는 정책 연구의 분석 표본으로 그대로 반영되며, 사례품은 발송되지 않습니다.\n\n' +
+          '확인 = 사례품 포기 후 참여 진행\n취소 = 등록 취소'
+        );
+        if (!ok) {
+          this.render();
+          return;
+        }
+        this.regAcceptNoReward = true;
+        // 동일 핸들러 재호출 — accept_no_reward=true 플래그로 backend가 quota_waived 토큰 발급.
+        await this.submitRegistration();
+        return;
+      }
+
       this.clearRegisterDraft();
+      this.regAcceptNoReward = false;
       // 발급된 토큰으로 이동 — 페이지 reload하여 토큰 인증 흐름 진입.
       const url = new URL(window.location.href);
       url.searchParams.set('token', data.token);
@@ -1692,9 +1836,39 @@ export class SurveyEngine {
     const p = this.participant || {};
     const isReviewerOrStaff = p.category === '연구진' || p.source === 'staff';
 
-    // 본인 직군 확인 카드 — 연구진/staff/이미 제출 완료자는 변경 옵션 노출하지 않음.
-    // (이미 제출했으면 직군은 그 시점에 확정된 분류이므로 사후 변경 차단)
-    // 인트로의 "본인 직군 확인" 드롭다운은 제거. 직군은 PART I Q6에서 응답자가 직접 선택한다.
+    // 정원 마감 후 사례품 자발 포기 결정한 응답자 — 동의·드롭다운 모두 잠금.
+    const isWaived = !!p.quota_waived;
+
+    // 본인 직군 확인 카드 — 연구진/staff/이미 제출 완료자/waived 는 변경 옵션 노출하지 않음.
+    // 인트로 드롭다운으로 확정한 직군이 곧 Q6 자기응답으로 자동 입력되며 본문 Q6은 readonly.
+    // 4직군 외(기타·미분류) 사전분류는 placeholder + 명시 선택 강제 — 자동채움 회피.
+    const allowCategoryChange = !isReviewerOrStaff && !this.submitted && !isWaived;
+    const categoryOptions = ['설계', '시공', '유지관리', '건축행정'];
+    const currentCat = p.category || '';
+    const prefillMatch = categoryOptions.includes(currentCat) ? currentCat : '';
+    const categorySelectHtml = allowCategoryChange ? `
+      <div class="intro-card">
+        <h2>본인 직군 확인 <span style="color:#dc2626">*</span></h2>
+        <p style="margin:0 0 12px;color:#374151;line-height:1.7;font-size:14px">
+          본 설문은 <strong>4직군(설계·시공·유지관리·건축행정)</strong> 분석을 전제로 합니다.
+          ${currentCat ? `사전 분류는 <strong>${this.escape(currentCat)}</strong>입니다. ` : ''}본인 직무에 가장 가까운 직군을 선택해 주십시오.
+          여기서 확정한 직군은 본 설문 Q6 응답으로 자동 입력되며 이후 변경할 수 없습니다.
+        </p>
+        <label style="display:block;font-size:13px;color:#374151;margin-bottom:6px">
+          직군 <span style="color:#dc2626">*</span>
+        </label>
+        <select id="intro-category" style="width:100%;max-width:280px;padding:10px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:14px;background:#fff">
+          ${prefillMatch ? '' : '<option value="" disabled selected>— 직군을 선택해 주십시오 —</option>'}
+          ${categoryOptions.map(c => `
+            <option value="${c}" ${c === prefillMatch ? 'selected' : ''}>${c}</option>
+          `).join('')}
+        </select>
+        <p style="margin:8px 0 0;font-size:12px;color:#6b7280;line-height:1.6">
+          ※ 각 직군별로 사례품 정원(75부)이 별도로 운영됩니다. 정원이 마감된 직군은 신규 사례품 동의 참여가 차단됩니다.
+        </p>
+      </div>
+    ` : '';
+
     const showRewardOnly = this.submitted
       && this.editMode === EDIT_MODE.EDIT
       && !p.consent_reward
@@ -1745,6 +1919,20 @@ export class SurveyEngine {
           </dl>
         </div>
 
+        ${categorySelectHtml}
+
+        ${isWaived ? `
+        <div class="intro-card" style="background:#fef3c7;border:1px solid #f59e0b">
+          <h2 style="color:#92400e">사례품 없이 참여 결정 응답자</h2>
+          <p style="margin:0 0 8px;color:#78350f;line-height:1.7;font-size:14px">
+            <strong>${this.escape(p.quota_waived_category || '')}</strong> 직군의 사례품 정원 마감 후
+            사례품을 자발 포기하고 본 설문에 참여하기로 결정하셨습니다.
+          </p>
+          <p style="margin:0;color:#78350f;line-height:1.7;font-size:13px">
+            응답 결과는 정책 연구의 분석 표본에 반영됩니다. 사례품은 발송되지 않으며, 사례품 동의·휴대전화 입력란은 잠금 처리되었습니다.
+          </p>
+        </div>
+        ` : `
         <div class="intro-card consent-block">
           <h2>${N.title}</h2>
           <p class="consent-intro">${N.lead}</p>
@@ -1765,6 +1953,7 @@ export class SurveyEngine {
             <p id="intro-phone-error" style="display:none;color:#b91c1c;font-size:12px;margin-top:6px"></p>
           </div>
         </div>
+        `}
 
         <button class="btn-start" id="btn-start">${startLabel}</button>
         ${rewardOnlyBtn}
@@ -1775,25 +1964,37 @@ export class SurveyEngine {
     this.container.querySelector('#btn-start')?.addEventListener('click', async () => {
       if (!this.commitIntroConsent()) return;
 
-      // 직군 확정·quota 차단은 PART I Q6 응답 시점에 별도 endpoint에서 처리(Phase 2~3).
-      // 인트로 /start는 사례품 동의·휴대폰 저장 + started_at 마킹만 담당.
+      // 인트로의 직군 드롭다운에서 확정한 값을 그대로 Q6 자기응답으로 박는다.
+      // /start endpoint가 단일 quota 게이트이고, 본문 Q6은 readonly로 노출만 한다.
+      const catSelect = this.container.querySelector('#intro-category');
+      const selectedCategory = catSelect ? (catSelect.value || '').trim() : '';
+      if (catSelect && !selectedCategory) {
+        alert('본인 직군을 선택해 주십시오. 본 설문은 4직군(설계·시공·유지관리·건축행정) 분석을 전제로 합니다.');
+        catSelect.focus();
+        return;
+      }
+
       const startBtn = this.container.querySelector('#btn-start');
       if (startBtn) { startBtn.disabled = true; }
       try {
+        const reqBody = {
+          consent_reward: !!this.responses['CONSENT_REWARD'],
+          reward_phone: (this.responses['PHONE'] || '').trim(),
+        };
+        if (selectedCategory) reqBody.category = selectedCategory;
         const res = await fetch(`${API_BASE}/ai/api/survey/${this.token}/start`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            consent_reward: !!this.responses['CONSENT_REWARD'],
-            reward_phone: (this.responses['PHONE'] || '').trim(),
-          }),
+          body: JSON.stringify(reqBody),
         });
         if (res.status === 409) {
-          // invitation 분류 직군이 이미 마감된 케이스 — 사례품 미동의 옵션 화면으로 전환.
-          this.gate = GATE.CATEGORY_FULL;
-          if (this.participant) {
-            this.participant.category_full = true;
-            this.participant.already_started = false;
+          // 사용자가 인트로에서 선택한 직군이 이미 마감 — 사례품 자발 포기 옵션 화면으로 전환.
+          // backend 가 quota_blocked_at 마킹까지 처리하므로 재진입 시 멱등 동일 화면.
+          this.quotaBlockedCategory = selectedCategory;
+          this.gate = GATE.QUOTA_BLOCKED;
+          if (this.participant && selectedCategory) {
+            this.participant.category = selectedCategory;
+            this.participant.quota_blocked_category = selectedCategory;
           }
           this.render();
           return;
@@ -1804,10 +2005,19 @@ export class SurveyEngine {
           if (startBtn) { startBtn.disabled = false; }
           return;
         }
+        const respData = await res.json().catch(() => ({}));
+        const newCategory = respData.category || selectedCategory || (this.participant?.category || '');
         if (this.participant) {
           this.participant.already_started = true;
           this.participant.consent_reward = !!this.responses['CONSENT_REWARD'];
           this.participant.reward_phone = (this.responses['PHONE'] || '').trim();
+          if (newCategory) this.participant.category = newCategory;
+        }
+        // 인트로 드롭다운 확정값 → Q6 자기응답 자동 입력. 본문 Q6은 readonly.
+        const q6Idx = CATEGORY_TO_Q6_INDEX[newCategory];
+        if (q6Idx !== undefined) {
+          this.responses['Q6'] = q6Idx;
+          this.saveResponses();
         }
         this.currentPage = 1;
         this.render();
@@ -1937,6 +2147,12 @@ export class SurveyEngine {
       return this.renderSubQuestions(q);
     }
 
+    // Q6 — 인트로 드롭다운에서 확정한 직군으로 자동 입력된 readonly 카드.
+    // 본문에서 변경 불가. participants.category·정원 카운트 모두 동일 출처.
+    if (q.id === 'Q6') {
+      return this.renderQ6Locked(q);
+    }
+
     let inner = '';
     const noteHtml = q.note ? `<p class="question-note">${q.note}</p>` : '';
 
@@ -1975,6 +2191,46 @@ export class SurveyEngine {
         </div>
         ${noteHtml}
         ${inner}
+        <p class="question-error" data-error="${q.id}"></p>
+      </div>
+    `;
+  }
+
+  // Q6 readonly 렌더 — 인트로 드롭다운에서 확정한 직군을 표시만 한다.
+  // 응답값(`this.responses.Q6`)은 인트로 [설문 시작하기] 클릭 시점에 박혀 있어야 한다.
+  renderQ6Locked(q) {
+    const v = this.responses['Q6'];
+    const selectedIdx = (typeof v === 'number' && v >= 0 && v < q.options.length) ? v : null;
+    const optsHtml = q.options.map((opt, i) => {
+      const isSel = i === selectedIdx;
+      return `
+        <label class="option-item${isSel ? ' selected-locked' : ''}" data-index="${i}" style="${isSel
+          ? 'background:#eef2ff;border:1px solid #6366f1;cursor:default'
+          : 'opacity:0.5;cursor:not-allowed'};">
+          <input type="radio" name="${q.id}" value="${i}" ${isSel ? 'checked' : ''} disabled />
+          <span class="option-text">${opt}</span>
+        </label>
+      `;
+    }).join('');
+
+    const noteHtml = q.note ? `<p class="question-note">${q.note}</p>` : '';
+    const lockedNotice = selectedIdx !== null
+      ? '인트로의 “본인 직군 확인”에서 확정한 직군입니다. 본문에서는 변경할 수 없습니다.'
+      : '본인 직군이 확정되지 않았습니다. 시작 페이지로 돌아가 직군을 선택해 주세요.';
+
+    return `
+      <div class="question-block" data-qid="${q.id}">
+        <div class="question-label">
+          <span class="question-id">${q.id.replace(/([A-Z]+)(\d)/, '$1-$2')}</span>
+          <span class="question-text">${q.text}</span>
+        </div>
+        ${noteHtml}
+        <div class="option-list" data-qid="${q.id}" data-type="radio">
+          ${optsHtml}
+        </div>
+        <p style="margin:8px 0 0;font-size:12px;color:#6b7280;line-height:1.6;background:#f9fafb;padding:8px 10px;border-left:3px solid #6366f1;border-radius:4px">
+          ※ ${lockedNotice}
+        </p>
         <p class="question-error" data-error="${q.id}"></p>
       </div>
     `;
