@@ -22,6 +22,7 @@ const GATE = {
   CLOSED: 'closed',               // 4직군 합산 정원(300부) 도달 — 모든 신규/이어작성 차단
   CATEGORY_FULL: 'category_full', // 토큰 보유자지만 본인 직군 정원 마감 + 미시작 — 사례품 미동의 옵션만 허용
   QUOTA_BLOCKED: 'quota_blocked', // PART I Q6에서 본인 직군 quota 마감 차단 — 응답 종료 (사례품 없이 참여 옵션 미제공)
+  FILL_MISSING: 'fill_missing',   // 제출 완료자의 누락 항목(PART III 분기 등) 보완 모드 — 메일 안내로 진입
 };
 
 // 4직군 균등 75부 = 합산 300부 (백엔드 QUOTA_PER_CATEGORY와 일치)
@@ -47,6 +48,7 @@ export class SurveyEngine {
     const urlParams = new URLSearchParams(window.location.search);
     this.token = urlParams.get('token');
     this.justRegistered = urlParams.get('just_registered') === '1';
+    this.fillMissingMode = urlParams.get('fill') === '1';  // 보완 안내 메일 진입 시그널
     // 직원 테스트 모드: ?source=staff 진입 시 분석 제외 마커 부여
     this.isStaffMode = urlParams.get('source') === 'staff';
     this.participant = null;
@@ -143,7 +145,18 @@ export class SurveyEngine {
         } catch {}
       }
 
-      if (data.quota_waived) {
+      // 누락 항목 보완 모드 — 메일 안내(?fill=1)로 진입했고 실제 누락이 있으면 우선 처리.
+      // RESUBMIT_CHOICE 분기보다 앞서 검사 — 보완 안내 응답자는 곧장 누락 항목 폼으로.
+      const missing = Array.isArray(data.missing_qids) ? data.missing_qids : [];
+      if (this.fillMissingMode && data.has_responded && missing.length > 0) {
+        this.missingQids = missing;
+        if (data.responses) {
+          this.responses = { ...this.responses, ...data.responses };
+          this.saveResponses();
+          this.submitted = true;
+        }
+        this.gate = GATE.FILL_MISSING;
+      } else if (data.quota_waived) {
         // 정원 마감 후 사례품을 자발 포기하고 참여 결정한 응답자 — 멱등 OPEN 진입.
         // 동의 체크박스/휴대전화 입력은 인트로에서 자동 잠금(미동의 고정).
         this.participant = this.participant || {};
@@ -607,6 +620,10 @@ export class SurveyEngine {
       this.renderQuotaBlocked();
       return;
     }
+    if (this.gate === GATE.FILL_MISSING) {
+      this.renderFillMissing();
+      return;
+    }
     if (this.gate === GATE.DENIED) {
       this.renderAccessDenied();
       return;
@@ -868,6 +885,143 @@ export class SurveyEngine {
     } catch {
       this.quotaWaiveError = '네트워크 오류가 발생했습니다. 잠시 후 다시 시도해 주십시오.';
       this.quotaWaiveSubmitting = false;
+      this.render();
+    }
+  }
+
+  // ── 누락 항목 보완 모드 (FILL_MISSING) ──
+  // 직군 라우팅 오류로 PART III 분기 응답이 누락된 응답자가 메일 안내 URL(?fill=1)로 진입.
+  // missing_qids 에 해당하는 질문만 표시·답변·제출. submitted_at 은 그대로 유지(merge).
+
+  renderFillMissing() {
+    if (this.fillCompleted) {
+      this.renderFillMissingThanks();
+      return;
+    }
+    const m = SURVEY_META;
+    const missing = Array.isArray(this.missingQids) ? this.missingQids : [];
+    const submitting = !!this.fillSubmitting;
+    const errorMsg = this.fillError || '';
+
+    let questionsHtml = '';
+    const missingQs = [];
+    for (const qid of missing) {
+      const q = this.findQuestion(qid);
+      if (!q) continue;
+      missingQs.push(q);
+      questionsHtml += this.renderQuestion(q);
+    }
+
+    this.container.innerHTML = `
+      <div class="survey-container">
+        <div class="survey-header">
+          <div class="institution">${m.institution}</div>
+          <h1>누락 항목 보완 안내</h1>
+        </div>
+
+        <div class="intro-card" style="background:#fef9c3;border:1px solid #eab308">
+          <h2 style="color:#854d0e;margin-top:0">미응답 ${missing.length}문항을 보완해 주십시오</h2>
+          <p style="margin:0 0 8px;color:#713f12;line-height:1.7;font-size:14px">
+            본 응답에는 시스템 분기 오류로 본인 직군 특화 영역(PART III) 일부 문항이 누락된 상태입니다.
+            이전에 응답해 주신 다른 영역은 그대로 보존되어 있으며, 아래 ${missing.length}문항만 추가로 답변하시면 됩니다.
+          </p>
+          <p style="margin:0;color:#713f12;line-height:1.7;font-size:13px">
+            ※ 본 보완 응답이 완료되어야 사례품 발송 대상에 포함됩니다.
+          </p>
+        </div>
+
+        <div class="section">
+          ${questionsHtml}
+        </div>
+
+        ${errorMsg ? `<p style="color:#b91c1c;margin:12px 0;text-align:center">${this.escape(errorMsg)}</p>` : ''}
+
+        <button class="btn-start" id="btn-fill-submit" ${submitting ? 'disabled' : ''} style="width:100%;margin-top:14px">
+          ${submitting ? '제출 중…' : '누락 항목 제출하기'}
+        </button>
+      </div>
+    `;
+
+    // 기존 SINGLE·MULTI·LIKERT·MATRIX·TEXT 입력 핸들러 모두 활성화 — 가짜 section 객체로 위임.
+    // (보완 모드는 페이지 네비 없음. #btn-next/#btn-prev 등은 없으므로 optional chaining 으로 무탈 통과)
+    const fakeSection = { id: 'fill_missing_section', questions: missingQs };
+    this.bindEvents(fakeSection);
+
+    this.container.querySelector('#btn-fill-submit')?.addEventListener('click', () => this.submitFillMissing());
+  }
+
+  renderFillMissingThanks() {
+    const m = SURVEY_META;
+    this.container.innerHTML = `
+      <div class="survey-container">
+        <div class="survey-header">
+          <div class="institution">${m.institution}</div>
+          <h1>보완 응답이 제출되었습니다</h1>
+        </div>
+        <div class="intro-card" style="background:#ecfdf5;border:1px solid #10b981">
+          <p style="margin:0 0 8px;font-size:16px;line-height:1.7;color:#064e3b">
+            <strong>응답 보완이 완료되었습니다.</strong> 진심으로 감사드립니다.
+          </p>
+          <p style="margin:0;color:#065f46;line-height:1.7;font-size:14px">
+            보완 응답은 본 분석 표본에 반영되며, 사례품 발송 대상에도 정상적으로 포함됩니다.
+          </p>
+        </div>
+        <div class="register-meta">
+          <dl>
+            <dt>조사기관</dt><dd>${m.institution}</dd>
+            <dt>연구책임</dt><dd>${m.researcher}</dd>
+            <dt>문의</dt><dd>${m.contact}</dd>
+          </dl>
+        </div>
+      </div>
+    `;
+  }
+
+  async submitFillMissing() {
+    const missing = Array.isArray(this.missingQids) ? this.missingQids : [];
+    // 모든 누락 항목이 응답되었는지 validation.
+    const unanswered = [];
+    const payload = {};
+    for (const qid of missing) {
+      const v = this.responses[qid];
+      if (v === undefined || v === null || (Array.isArray(v) && v.length === 0)) {
+        unanswered.push(qid);
+      } else {
+        payload[qid] = v;
+      }
+    }
+    if (unanswered.length > 0) {
+      this.fillError = `미응답 항목이 있습니다: ${unanswered.join(', ')}`;
+      this.render();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+
+    this.fillSubmitting = true;
+    this.fillError = '';
+    this.render();
+
+    try {
+      const res = await fetch(`${API_BASE}/ai/api/survey/${this.token}/fill-missing`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ responses: payload }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        this.fillError = b.detail || `보완 응답 제출에 실패했습니다 (HTTP ${res.status}).`;
+        this.fillSubmitting = false;
+        this.render();
+        return;
+      }
+      const data = await res.json().catch(() => ({}));
+      this.fillSubmitting = false;
+      this.fillCompleted = true;
+      this.missingQids = Array.isArray(data.remaining_missing) ? data.remaining_missing : [];
+      this.render();
+    } catch {
+      this.fillError = '네트워크 오류가 발생했습니다. 잠시 후 다시 시도해 주십시오.';
+      this.fillSubmitting = false;
       this.render();
     }
   }

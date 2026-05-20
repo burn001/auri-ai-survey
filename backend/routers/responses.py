@@ -17,6 +17,7 @@ from models import (
     StartSurveyRequest,
     SelectCategoryRequest,
     WaiveRewardRequest,
+    FillMissingRequest,
 )
 from services.db import get_db
 from services.email_service import render_completion, render_email, send_email
@@ -63,6 +64,34 @@ async def _find_duplicate_identity(db, name: str, phone_norm: str, exclude_token
 
 
 Q6_INDEX_TO_CATEGORY = {0: "설계", 1: "시공", 2: "유지관리", 3: "건축행정"}
+
+# Q6 응답값별 PART III 분기 키. 보완 모드에서 누락 항목 계산에 사용.
+Q6_TO_PART3_QIDS = {
+    0: ("QA1", "QA2", "QA3"),
+    1: ("QB1", "QB2", "QB3"),
+    2: ("QC1", "QC2", "QC3"),
+    3: ("QD1", "QD2", "QD3"),
+}
+
+
+def _compute_missing_qids(response_doc: dict | None) -> list[str]:
+    """제출된 응답에서 PART III 분기 누락 항목 계산. 미제출이면 빈 리스트."""
+    if not response_doc or not response_doc.get("submitted_at"):
+        return []
+    resp = response_doc.get("responses") or {}
+    q6 = resp.get("Q6")
+    try:
+        q6_idx = int(q6) if q6 is not None else None
+    except (TypeError, ValueError):
+        return []
+    if q6_idx not in Q6_TO_PART3_QIDS:
+        return []
+    missing: list[str] = []
+    for qid in Q6_TO_PART3_QIDS[q6_idx]:
+        v = resp.get(qid)
+        if v is None or (isinstance(v, list) and len(v) == 0):
+            missing.append(qid)
+    return missing
 
 
 async def _completed_count_by_category(db) -> dict[str, int]:
@@ -332,6 +361,7 @@ async def verify_token(token: str):
         "quota_blocked_category": participant.get("quota_blocked_category", ""),
         "quota_waived": bool(participant.get("quota_waived")),
         "quota_waived_category": participant.get("quota_waived_category", ""),
+        "missing_qids": _compute_missing_qids(existing),
     }
 
 
@@ -565,6 +595,70 @@ async def waive_reward(token: str, body: WaiveRewardRequest):
         "status": "waived",
         "category": blocked_cat or category,
         "quota_waived_at": now.isoformat(),
+    }
+
+
+@router.post("/survey/{token}/fill-missing")
+async def fill_missing(token: str, body: FillMissingRequest, request: Request):
+    """제출 완료자(submitted_at != null)의 누락 항목만 보완 응답으로 받아 merge.
+
+    - 직군 라우팅 오류 시기에 PART III 분기 응답이 누락된 응답자가 보완 안내 메일을 통해 들어와
+      missing_qids 에 해당하는 키만 채우도록 한다.
+    - server 가 다시 missing_qids 를 계산하고 body.responses 키와 교집합만 merge. submitted_at 은 그대로.
+    - 제출 안 한 응답자(submitted_at=null)·누락 항목 없는 응답자는 409.
+    - body.responses 에 missing_qids 외의 키가 들어와도 무시(서버 신뢰 경계).
+    """
+    db = get_db()
+    participant = await db.participants.find_one({"token": token})
+    if not participant:
+        raise HTTPException(404, "유효하지 않은 설문 링크입니다.")
+
+    existing = await db.responses.find_one({"token": token})
+    if not existing or not existing.get("submitted_at"):
+        raise HTTPException(409, "보완 모드는 응답 제출 완료자만 사용 가능합니다.")
+
+    missing = _compute_missing_qids(existing)
+    if not missing:
+        raise HTTPException(409, "보완할 누락 항목이 없습니다.")
+
+    incoming = body.responses or {}
+    accepted: dict[str, Any] = {}
+    for qid in missing:
+        if qid in incoming:
+            accepted[qid] = incoming[qid]
+    if not accepted:
+        raise HTTPException(400, "보완 응답이 비어 있습니다.")
+
+    now = datetime.utcnow()
+    # responses dict 의 점 표기 set 으로 부분 갱신 — 다른 응답 키 무손상.
+    set_fields: dict[str, Any] = {"updated_at": now}
+    for qid, val in accepted.items():
+        set_fields[f"responses.{qid}"] = val
+
+    # 보완 이력 push (audit).
+    await db.responses.update_one(
+        {"token": token},
+        {
+            "$set": set_fields,
+            "$push": {
+                "fill_missing_log": {
+                    "at": now,
+                    "filled_qids": list(accepted.keys()),
+                    "ip": request.client.host if request.client else "",
+                    "user_agent": request.headers.get("user-agent", ""),
+                }
+            },
+        },
+    )
+
+    # 갱신 후 다시 missing 계산.
+    updated = await db.responses.find_one({"token": token})
+    remaining = _compute_missing_qids(updated)
+
+    return {
+        "status": "filled",
+        "filled_qids": list(accepted.keys()),
+        "remaining_missing": remaining,
     }
 
 

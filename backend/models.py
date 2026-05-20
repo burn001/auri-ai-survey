@@ -137,6 +137,15 @@ class SelectCategoryRequest(BaseModel):
     partial_responses: dict[str, Any] = Field(default_factory=dict)
 
 
+class FillMissingRequest(BaseModel):
+    """제출 완료자(submitted_at != null)의 누락 항목만 보완 응답.
+
+    server 가 verify_token 시점에 계산한 missing_qids 와 body.responses 키 교집합만
+    기존 responses 에 merge. submitted_at 은 그대로 유지(재제출 아님). updated_at 갱신.
+    """
+    responses: dict[str, Any] = Field(default_factory=dict)
+
+
 class WaiveRewardRequest(BaseModel):
     """정원 마감으로 차단된 응답자가 사례품을 자발 포기하고 참여를 결정할 때 호출.
 
