@@ -6,7 +6,7 @@ REM   Phase 0: telegram start notice
 REM   Phase 1: reward_notice  (responders without reward consent)
 REM   Phase 2: reward_resend  (invite recipients without response)
 REM   Phase 3: telegram report (reward)
-REM   Phase 4: pending invites (wave2 + wave3)   -- only when RESEND_EXIT=0
+REM   Phase 4: pending invites (wave4)           -- only when RESEND_EXIT=0
 REM   Phase 5: telegram report (invites)
 REM Each phase script self-aborts on quota; next run dedupes via DB.
 REM Flat if-goto layout (no parens block) -- prior version with
@@ -67,7 +67,7 @@ REM ---------- Phase 4/5: only enter when resend cleanly succeeded ----------
 if not "!RESEND_EXIT!"=="0" goto :PHASE45_SKIP
 
 echo.                                                                 >> "%LOGFILE%"
-echo --- [%time%] phase 4 : pending invites (wave2 + wave3) ---       >> "%LOGFILE%"
+echo --- [%time%] phase 4 : pending invites (wave4) ---               >> "%LOGFILE%"
 docker exec auri-survey-api python /app/scripts/send_pending_invites.py >> "%LOGFILE%" 2>&1
 set INVITE_EXIT=!ERRORLEVEL!
 

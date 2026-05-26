@@ -1,6 +1,7 @@
 """invite 일괄 발송 종료 후 Telegram 결과 보고.
 
-run_reward_dispatch.bat의 Phase 5에서 호출. today(KST) 기준 invite sent/failed 집계 + wave2/wave3.json 토큰 중 미발송 잔여 카운트.
+run_survey_dispatch.bat의 Phase 5에서 호출. today(KST) 기준 invite sent/failed 집계 + wave4.json 토큰 중 미발송 잔여 카운트.
+wave1~3은 발송 완료되어 보고 대상에서 제외(2026-05-26).
 """
 import asyncio
 import json
@@ -16,7 +17,7 @@ from services.db import connect, disconnect, get_db
 
 
 KST = timezone(timedelta(hours=9))
-WAVES = [2, 3]
+WAVES = [4]
 SCRIPTS_DIR = Path('/app/scripts')
 
 
@@ -73,21 +74,24 @@ async def main() -> int:
     remain = sum(1 for t in all_tokens if t not in sent_tokens and t not in bounced)
 
     now_kst = datetime.now(KST).strftime('%Y-%m-%d %H:%M KST')
+    sent_cnt = len(sent_tokens)
 
     lines = [
-        '📬 [AURI 설문] 미발송 풀 invite 발송 결과',
+        '📬 [AURI 설문] wave4 invite 발송 결과',
         f'시각: {now_kst}',
         '',
-        '— Phase 4 wave2 + wave3 invite (사례품 안내 포함)',
+        '— Phase 4 wave4 invite (사례품 안내 포함)',
         f'   오늘 sent {invite_sent_today} / failed {invite_fail_today}',
-        f'   wave 큐 잔여 {remain} (전체 {len(all_tokens)} 중 미발송)',
+        f'   wave4 큐: 전체 {len(all_tokens)} / 발송완료 {sent_cnt} / 잔여 {remain}',
         '',
     ]
     if remain > 0:
-        lines.append('⚠️ Gmail 한도 또는 abort로 잔여가 있습니다.')
-        lines.append('   다음 실행 시 dedup하여 자동 이어집니다.')
+        lines.append(f'⚠️ wave4 잔여 {remain}건 — Gmail 한도 또는 abort로 미발송.')
+        lines.append('   다음 실행(익일 정오) 시 dedup하여 자동 이어집니다.')
+    elif invite_fail_today > 0:
+        lines.append('✅ wave4 잔여 0 — 단, 오늘 일부 실패 건 있었음(상단 failed 확인).')
     else:
-        lines.append('✅ wave2 + wave3 전 토큰 발송 완료.')
+        lines.append('✅ wave4 전 토큰 발송 완료.')
 
     text = '\n'.join(lines)
     print(text)

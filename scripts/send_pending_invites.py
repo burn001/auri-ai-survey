@@ -1,9 +1,10 @@
-"""미발송 풀(wave2 + wave3 + wave4)에 대한 invite 메일 dedup 발송.
+"""미발송 풀(wave4)에 대한 invite 메일 dedup 발송.
 
 run_survey_dispatch.bat의 Phase 4에서 호출.
+wave1~3은 발송 완료되어 큐에서 제외(2026-05-26). wave4만 dedup 대상.
 
 흐름:
-1. wave2.json + wave3.json + wave4.json 토큰 모음
+1. wave4.json 토큰 모음
 2. participants에서 email_sent=True 토큰 제외 (dedup)
 3. 50통씩 admin /email/send POST, 한도 초과 시 abort + exit 2
 
@@ -38,7 +39,7 @@ SUBJECT = '건축 분야 AI 설문조사 참여 요청 (AURI)'
 EMAIL_TYPE = 'invite'
 SUB_BATCH = 50
 INTERVAL_SEC = 120
-WAVES = [2, 3, 4]
+WAVES = [4]
 SCRIPTS_DIR = Path('/app/scripts')
 
 
