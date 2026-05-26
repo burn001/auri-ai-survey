@@ -25,33 +25,48 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 DEFAULT_URI = "mongodb://alrisAdmin:5kBh10AQc3QihNgbUajOVdQSq3pMtq5b@127.0.0.1:27017/?authSource=admin&directConnection=true"
 
+# 응답자 Q6 자기응답 인덱스 → 분야. backend Q6_INDEX_TO_CATEGORY와 동일.
+Q6_INDEX_TO_CATEGORY = {0: "설계", 1: "시공", 2: "유지관리", 3: "건축행정"}
+
 
 def by_category(db):
-    """category × (풀, 발송, 응답)"""
-    pipeline = [
-        {"$lookup": {"from": "responses", "localField": "token", "foreignField": "token", "as": "r"}},
-        {"$project": {
-            "category": {"$ifNull": ["$category", "(미분류)"]},
-            "sent": {"$cond": ["$email_sent", 1, 0]},
-            "submitted": {
-                "$cond": [
-                    {"$gt": [
-                        {"$size": {"$filter": {"input": "$r", "cond": {"$ne": ["$$this.submitted_at", None]}}}},
-                        0,
-                    ]},
-                    1, 0,
-                ]
-            },
-        }},
+    """분야별 (풀, 발송, 응답).
+
+    분모(풀·발송)는 participants.category(사전 발송 분류) 기준,
+    분자(응답)는 responses.responses.Q6(응답자 자기응답) 기준으로 분리한다.
+    Q6는 응답자만 가지므로 발송 분류와 그룹 기준이 다르며, 본 누계 보고의
+    표준은 '분자만 Q6'다 (2026-05-26 정정 — 이전엔 분자도 발송분류였음).
+    """
+    # 분모: 발송 분류 기준 풀·발송
+    send_rows = db.participants.aggregate([
         {"$group": {
-            "_id": "$category",
+            "_id": {"$ifNull": ["$category", "(미분류)"]},
             "pool": {"$sum": 1},
-            "sent": {"$sum": "$sent"},
-            "submitted": {"$sum": "$submitted"},
+            "sent": {"$sum": {"$cond": ["$email_sent", 1, 0]}},
         }},
-        {"$sort": {"submitted": -1}},
-    ]
-    return list(db.participants.aggregate(pipeline))
+    ])
+    agg = {r["_id"]: {"_id": r["_id"], "pool": r["pool"], "sent": r["sent"], "submitted": 0}
+           for r in send_rows}
+
+    # 분자: 제출 응답을 Q6 자기응답으로 그룹
+    sub_rows = db.responses.aggregate([
+        {"$match": {"submitted_at": {"$ne": None}}},
+        {"$group": {"_id": "$responses.Q6", "n": {"$sum": 1}}},
+    ])
+    for r in sub_rows:
+        key = r["_id"]
+        try:
+            key = int(key)
+        except (TypeError, ValueError):
+            pass
+        label = Q6_INDEX_TO_CATEGORY.get(key, "(미분류)")
+        if label not in agg:
+            agg[label] = {"_id": label, "pool": 0, "sent": 0, "submitted": 0}
+        agg[label]["submitted"] += r["n"]
+
+    rows = list(agg.values())
+    rows.sort(key=lambda x: x["submitted"], reverse=True)
+    return rows
 
 
 def by_source(db):
