@@ -15,6 +15,23 @@ logger = logging.getLogger(__name__)
 
 ALLOWED_EMAIL_TYPES = {"invite", "reminder", "deadline", "custom"}
 
+# 직군 분류 단일 출처 = 응답자 Q6 자기응답. participants.category(초대 분류)가 아님.
+# 정원/분기 로직(routers.responses)과 동일한 매핑·정원을 로컬 상수로 둔다(순환 import 회피).
+Q6_INDEX_TO_CATEGORY = {0: "설계", 1: "시공", 2: "유지관리", 3: "건축행정"}
+QUOTA_PER_CATEGORY = {"설계": 75, "시공": 75, "유지관리": 75, "건축행정": 75}
+
+# 응답 doc 의 responses.Q6 인덱스를 직군명으로 변환하는 aggregation 식.
+# Q6 가 4직군 범위를 벗어나거나 없으면 participant.category 로 폴백(엣지케이스).
+Q6_CATEGORY_EXPR = {
+    "$switch": {
+        "branches": [
+            {"case": {"$eq": ["$responses.Q6", idx]}, "then": cat}
+            for idx, cat in Q6_INDEX_TO_CATEGORY.items()
+        ],
+        "default": {"$ifNull": ["$participant.category", ""]},
+    }
+}
+
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
@@ -30,56 +47,61 @@ async def get_stats(admin: dict = Depends(verify_admin_token)):
     total_p = await db.participants.count_documents({})
     total_r = await db.responses.count_documents({"submitted_at": {"$ne": None}})
 
-    submitted_filter = {
-        "$filter": {
-            "input": "$resp",
-            "as": "r",
-            "cond": {"$ne": ["$$r.submitted_at", None]},
-        }
-    }
-    pipeline = [
+    # 직군별 응답 분포 — 응답자 Q6 자기응답 단일 출처 기준.
+    # 사례품 정원 카운트(reward_consented)는 enforcement(_completed_count_by_category)와
+    # 동일하게 source != staff & consent_reward=true 로 집계해 대시보드/마감 판정을 일치시킨다.
+    dist_pipeline = [
+        {"$match": {"submitted_at": {"$ne": None}, "responses.Q6": {"$in": [0, 1, 2, 3]}}},
         {"$lookup": {
-            "from": "responses",
+            "from": "participants",
             "localField": "token",
             "foreignField": "token",
-            "as": "resp",
+            "as": "p",
         }},
-        {"$addFields": {
-            "has_submitted": {"$gt": [{"$size": submitted_filter}, 0]},
-            "is_reward_consented": {
-                "$and": [
-                    {"$gt": [{"$size": submitted_filter}, 0]},
-                    {"$eq": ["$consent_reward", True]},
-                    {"$ne": ["$source", "staff"]},
-                ]
-            },
-        }},
+        {"$unwind": {"path": "$p", "preserveNullAndEmptyArrays": True}},
         {"$group": {
-            "_id": "$category",
-            "participants": {"$sum": 1},
-            "responded": {"$sum": {"$cond": ["$has_submitted", 1, 0]}},
-            "reward_consented": {"$sum": {"$cond": ["$is_reward_consented", 1, 0]}},
+            "_id": "$responses.Q6",
+            "responded": {"$sum": 1},
+            "reward_consented": {"$sum": {"$cond": [
+                {"$and": [
+                    {"$eq": ["$p.consent_reward", True]},
+                    {"$ne": ["$p.source", "staff"]},
+                ]},
+                1, 0,
+            ]}},
         }},
-        {"$sort": {"_id": 1}},
     ]
-    cursor = db.participants.aggregate(pipeline)
-    by_category = {}
-    async for doc in cursor:
-        cat = doc["_id"] or "미분류"
-        by_category[cat] = {
-            "participants": doc["participants"],
-            "responded": doc["responded"],
-            "reward_consented": doc.get("reward_consented", 0),
-        }
+    raw = {}
+    async for doc in db.responses.aggregate(dist_pipeline):
+        cat = Q6_INDEX_TO_CATEGORY.get(doc["_id"])
+        if cat:
+            raw[cat] = {
+                "responded": doc["responded"],
+                "reward_consented": doc.get("reward_consented", 0),
+            }
 
-    # 4직군 정원(75부) 정보 함께 노출 — 대시보드 보조 라벨용
-    quota_per_category = {"설계": 75, "시공": 75, "유지관리": 75, "건축행정": 75}
+    by_category = []
+    for cat in ("설계", "시공", "유지관리", "건축행정"):
+        d = raw.get(cat, {"responded": 0, "reward_consented": 0})
+        by_category.append({
+            "category": cat,
+            "responded": d["responded"],
+            "pct": round(d["responded"] / total_r * 100, 1) if total_r else 0,
+            "reward_consented": d["reward_consented"],
+            "quota": QUOTA_PER_CATEGORY[cat],
+        })
+    # Q6 응답 분포 단독 — 응답수 내림차순
+    by_category.sort(key=lambda x: x["responded"], reverse=True)
 
+    classified = sum(d["responded"] for d in by_category)
     return {
         "total_participants": total_p,
         "total_responses": total_r,
-        "by_category": by_category,
-        "quota_per_category": quota_per_category,
+        "by_category": by_category,            # Q6 자기응답 기준 분포 (내림차순 list)
+        "uncategorized": total_r - classified,  # Q6 누락/범위 외 제출 (정상 운영 시 0)
+        "total_reward_consented": sum(d["reward_consented"] for d in by_category),
+        "total_quota": sum(QUOTA_PER_CATEGORY.values()),
+        "basis": "Q6",
     }
 
 
@@ -102,9 +124,11 @@ async def list_responses(
             "as": "participant",
         }},
         {"$unwind": {"path": "$participant", "preserveNullAndEmptyArrays": True}},
+        # 직군 = 응답자 Q6 자기응답 단일 출처 (초대 분류 아님)
+        {"$addFields": {"q6_category": Q6_CATEGORY_EXPR}},
     ]
     if category:
-        pipeline.append({"$match": {"participant.category": category}})
+        pipeline.append({"$match": {"q6_category": category}})
     if source == "self":
         pipeline.append({"$match": {"participant.source": "self"}})
     elif source == "imported":
@@ -139,7 +163,7 @@ async def list_responses(
             "name": "$participant.name",
             "email": "$participant.email",
             "org": "$participant.org",
-            "category": "$participant.category",
+            "category": "$q6_category",
             "source": {"$ifNull": ["$participant.source", "imported"]},
             "consent_reward": {"$ifNull": ["$participant.consent_reward", False]},
             "reward_name": {"$ifNull": ["$participant.reward_name", ""]},
