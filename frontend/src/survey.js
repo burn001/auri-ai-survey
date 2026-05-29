@@ -1238,24 +1238,7 @@ export class SurveyEngine {
 
   renderRegisterLanding() {
     const m = SURVEY_META;
-    const byCat = this.surveyStatus?.by_category || [];
-    const quotaHtml = byCat.length ? `
-      <div class="register-card">
-        <h2>직군별 응답 현황</h2>
-        <table style="width:100%;border-collapse:collapse;font-size:14px">
-          ${byCat.map(c => `
-            <tr>
-              <td style="padding:8px 0;color:var(--c-text-secondary)">${this.escape(c.category)} 직군</td>
-              <td align="right" style="padding:8px 0">
-                <strong>${c.completed}</strong> / ${c.quota}부
-                ${c.is_full ? '<span style="color:#a04040;margin-left:8px">· 마감</span>' : ''}
-              </td>
-            </tr>
-          `).join('')}
-        </table>
-        <p class="register-hint" style="margin-top:12px">각 직군 정원이 충족되면 해당 직군은 자동으로 마감됩니다. 조기 마감을 피하시려면 가급적 빠른 참여를 부탁드립니다.</p>
-      </div>
-    ` : '';
+    // 직군별 응답 현황(직군별 응답수·정원·마감)은 공개 페이지에 노출하지 않는다.
 
     const staffBanner = this.isStaffMode ? `
       <div class="register-card" style="background:#fef3c7;border-color:#fcd34d">
@@ -1290,8 +1273,6 @@ export class SurveyEngine {
               <li>모든 응답은 통계 처리 후 <strong>익명</strong>으로 활용됩니다.</li>
             </ul>
           </div>
-
-          ${quotaHtml}
 
           <div class="register-card register-reward">
             <h2>🎁 사례품 안내</h2>
@@ -1510,21 +1491,13 @@ export class SurveyEngine {
     const submittingHtml = this.regSubmitting
       ? '<span class="register-submitting">등록 중…</span>' : '';
 
-    const byCat = this.surveyStatus?.by_category || [];
-    const fullCats = new Set(byCat.filter(c => c.is_full).map(c => c.category));
-
-
     const catRadio = (val, label, helper) => {
-      const isFull = fullCats.has(val);
       const checked = d.category === val ? 'checked' : '';
-      // 마감 직군도 선택은 허용 — 제출 시 종료 안내 + 기기 차단으로 직군 변경 재시도를 억제하기 위함.
-      const tag = isFull
-        ? '<span style="margin-left:6px;color:#a04040;font-size:12px">· 정원 마감 (선택 시 조사 종료 안내)</span>'
-        : '';
+      // 직군별 정원 현황은 공개 페이지에 노출하지 않는다 — 마감 직군은 제출 단계에서 종료 안내로 처리.
       return `
         <label class="register-radio">
           <input type="radio" name="reg-category" value="${val}" ${checked}>
-          <span><strong>${label}</strong>${tag}<br><small style="color:var(--c-text-secondary)">${helper}</small></span>
+          <span><strong>${label}</strong><br><small style="color:var(--c-text-secondary)">${helper}</small></span>
         </label>
       `;
     };
@@ -1562,7 +1535,7 @@ export class SurveyEngine {
 
           <div class="register-section">
             <h3>② 직군 및 소속 <span class="register-section-tag">(분류 통계용 — 동의 불요)</span></h3>
-            <p class="register-hint">주된 직무 기준 1개 직군을 선택해 주십시오. 정원이 마감된 직군은 더 이상 응답을 받지 않습니다.</p>
+            <p class="register-hint">주된 직무 기준 1개 직군을 선택해 주십시오.</p>
             <div class="register-grid">
               <label class="full">
                 <span>직군 *</span>
