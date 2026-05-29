@@ -41,6 +41,9 @@ const REG_STEP = {
 };
 
 const REGISTER_DRAFT_KEY = 'auri_ai_register_draft';
+// 자가등록 정원 마감을 만난 기기 차단 마커 — 직군을 바꿔 재시도하는 우회를 억제(기기 통째 차단).
+// localStorage 단위이므로 시크릿 모드·캐시 삭제·타 브라우저로는 우회 가능(캐주얼 retry 억제용).
+const QUOTA_BLOCK_KEY = 'auri_ai_quota_blocked';
 
 const EDIT_MODE = {
   NEW: 'new',
@@ -62,6 +65,8 @@ export class SurveyEngine {
     this.updatedAt = null;
     this.editMode = EDIT_MODE.NEW;
     this.gate = this.token ? GATE.LOADING : GATE.REGISTER;
+    // 토큰 없는 공개 진입에서만 기기 차단 적용 — 초대 토큰 보유자는 영향 없음.
+    this.deviceQuotaBlocked = !this.token && this.isDeviceQuotaBlocked();
     this.regStep = REG_STEP.LANDING;
     this.regDraft = this.loadRegisterDraft();
     this.regError = '';
@@ -231,6 +236,22 @@ export class SurveyEngine {
 
   clearRegisterDraft() {
     try { localStorage.removeItem(REGISTER_DRAFT_KEY); } catch {}
+  }
+
+  // ── 기기 차단 마커 (정원 마감 직군을 만난 기기는 직군 불문 재등록 차단) ──
+  isDeviceQuotaBlocked() {
+    try { return !!localStorage.getItem(QUOTA_BLOCK_KEY); } catch { return false; }
+  }
+
+  setDeviceQuotaBlocked(category) {
+    try {
+      localStorage.setItem(QUOTA_BLOCK_KEY, JSON.stringify({ at: Date.now(), category: category || '' }));
+    } catch {}
+  }
+
+  getDeviceQuotaBlockedCategory() {
+    try { return (JSON.parse(localStorage.getItem(QUOTA_BLOCK_KEY) || '{}').category) || ''; }
+    catch { return ''; }
   }
 
   // ── Persistence ──
@@ -1178,10 +1199,41 @@ export class SurveyEngine {
 
   // ── Register (공개 단일 링크 자가등록) ──
   renderRegister() {
+    if (this.deviceQuotaBlocked) return this.renderRegisterQuotaClosed();
     if (this.regStep === REG_STEP.LANDING) return this.renderRegisterLanding();
     if (this.regStep === REG_STEP.CONSENT) return this.renderRegisterConsent();
     if (this.regStep === REG_STEP.INFO) return this.renderRegisterInfo();
     if (this.regStep === REG_STEP.RECOVER) return this.renderRecover();
+  }
+
+  // 정원 마감 직군을 만난(또는 기기 차단 마커가 있는) 공개 진입 — 종료 안내만.
+  renderRegisterQuotaClosed() {
+    const m = SURVEY_META;
+    const cat = this.regQuotaClosedCategory || this.getDeviceQuotaBlockedCategory();
+    this.container.innerHTML = `
+      <div class="survey-container">
+        <div class="register-landing">
+          <div class="register-institution">${m.institution}</div>
+          <h1 class="register-title">설문 조사가 종료되었습니다</h1>
+          <div class="register-card" style="text-align:center;padding:40px 24px">
+            <p style="font-size:16px;line-height:1.8;margin:0 0 12px">
+              ${cat ? `<strong>${this.escape(cat)}</strong> 직군의 ` : ''}응답 정원이 모두 충족되어<br>
+              설문 조사가 종료되었습니다.
+            </p>
+            <p style="font-size:15px;color:var(--c-text-secondary);margin:0;line-height:1.7">
+              본 조사에 관심 가져 주셔서 진심으로 감사드립니다.
+            </p>
+          </div>
+          <div class="register-meta">
+            <dl>
+              <dt>조사기관</dt><dd>${m.institution}</dd>
+              <dt>연구책임</dt><dd>${m.researcher}</dd>
+              <dt>문의</dt><dd>${m.contact}</dd>
+            </dl>
+          </div>
+        </div>
+      </div>
+    `;
   }
 
   renderRegisterLanding() {
@@ -1465,9 +1517,9 @@ export class SurveyEngine {
     const catRadio = (val, label, helper) => {
       const isFull = fullCats.has(val);
       const checked = d.category === val ? 'checked' : '';
-      // 마감 직군이라도 사례품 포기 옵트인 흐름으로 선택 허용 — disabled 제거, 안내 텍스트로 표시.
+      // 마감 직군도 선택은 허용 — 제출 시 종료 안내 + 기기 차단으로 직군 변경 재시도를 억제하기 위함.
       const tag = isFull
-        ? '<span style="margin-left:6px;color:#a04040;font-size:12px">· 사례품 정원 마감 (사례품 없이 참여 가능)</span>'
+        ? '<span style="margin-left:6px;color:#a04040;font-size:12px">· 정원 마감 (선택 시 조사 종료 안내)</span>'
         : '';
       return `
         <label class="register-radio">
@@ -1510,7 +1562,7 @@ export class SurveyEngine {
 
           <div class="register-section">
             <h3>② 직군 및 소속 <span class="register-section-tag">(분류 통계용 — 동의 불요)</span></h3>
-            <p class="register-hint">주된 직무 기준 1개 직군을 선택해 주십시오. 정원이 마감된 직군은 선택할 수 없습니다.</p>
+            <p class="register-hint">주된 직무 기준 1개 직군을 선택해 주십시오. 정원이 마감된 직군은 더 이상 응답을 받지 않습니다.</p>
             <div class="register-grid">
               <label class="full">
                 <span>직군 *</span>
@@ -1627,7 +1679,6 @@ export class SurveyEngine {
         duty: (d.duty || '').trim(),
         consent_pi: !!d.consent_pi,
         is_staff: !!this.isStaffMode,
-        accept_no_reward: !!this.regAcceptNoReward,
       };
       const res = await fetch(`${API_BASE}/ai/api/survey/register`, {
         method: 'POST',
@@ -1670,27 +1721,20 @@ export class SurveyEngine {
       }
       const data = await res.json();
 
-      // 정원 마감 안내 — 사례품 자발 포기 옵트인 confirm.
+      // 정원 마감 직군 — 종료 안내만. 기기 차단 마커를 심어 직군 변경 재시도를 억제한다.
       if (data.status === 'quota_full') {
         this.regSubmitting = false;
-        const ok = window.confirm(
-          `${data.message || ''}\n\n` +
-          '사례품을 포기하고 본 설문에 참여하시겠습니까?\n' +
-          '응답 결과는 정책 연구의 분석 표본으로 그대로 반영되며, 사례품은 발송되지 않습니다.\n\n' +
-          '확인 = 사례품 포기 후 참여 진행\n취소 = 등록 취소'
-        );
-        if (!ok) {
-          this.render();
-          return;
-        }
-        this.regAcceptNoReward = true;
-        // 동일 핸들러 재호출 — accept_no_reward=true 플래그로 backend가 quota_waived 토큰 발급.
-        await this.submitRegistration();
+        const cat = data.category || this.regDraft.category || '';
+        this.setDeviceQuotaBlocked(cat);
+        this.deviceQuotaBlocked = true;
+        this.regQuotaClosedCategory = cat;
+        this.clearRegisterDraft();
+        this.render();
+        window.scrollTo({ top: 0, behavior: 'smooth' });
         return;
       }
 
       this.clearRegisterDraft();
-      this.regAcceptNoReward = false;
       // 발급된 토큰으로 이동 — 페이지 reload하여 토큰 인증 흐름 진입.
       const url = new URL(window.location.href);
       url.searchParams.set('token', data.token);

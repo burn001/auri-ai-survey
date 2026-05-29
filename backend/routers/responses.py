@@ -768,19 +768,18 @@ async def self_register(body: SelfRegisterRequest, request: Request):
                 f"설문 사례품 동의 응답 정원이 모두 충족되어 신규 참여가 마감되었습니다. (4직군 합산 {SURVEY_LIMIT}부 도달)",
             )
         if await _is_category_full(db, body.category):
-            if not body.accept_no_reward:
-                # 1차 안내 — frontend 가 자발 포기 옵션 화면으로 전환할 수 있도록 정상 응답으로 반환.
-                return {
-                    "status": "quota_full",
-                    "category": body.category,
-                    "quota": QUOTA_PER_CATEGORY[body.category],
-                    "message": (
-                        f"'{body.category}' 직군 사례품 동의 응답 정원({QUOTA_PER_CATEGORY[body.category]}부)이 "
-                        f"충족되어 신규 사례품 참여가 마감되었습니다."
-                    ),
-                }
-            # accept_no_reward=True → quota_waived 토큰 발급으로 이어진다.
-            self_register_quota_waived = True
+            # 정책(2026-05-29): 정원 마감 직군은 종료 안내만 내보낸다. 사례품 없이 참여(accept_no_reward)
+            # 옵션을 제거 — 마감 화면을 본 뒤 직군을 바꿔 재시도하는 우회를 막기 위해 토큰 발급 없이
+            # quota_full 로 종료한다. (기기 차단은 frontend localStorage 마커가 담당.)
+            return {
+                "status": "quota_full",
+                "category": body.category,
+                "quota": QUOTA_PER_CATEGORY[body.category],
+                "message": (
+                    f"'{body.category}' 직군 응답 정원({QUOTA_PER_CATEGORY[body.category]}부)이 "
+                    f"모두 충족되어 설문 조사가 종료되었습니다."
+                ),
+            }
 
     now = datetime.utcnow()
     ip = request.client.host if request.client else ""
