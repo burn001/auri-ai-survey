@@ -1709,3 +1709,75 @@ body {
   color: #dc2626;
   font-weight: 600;
 }
+
+/* ── Register (자가등록) 모바일 대응 ──
+   register-* 블록은 데스크톱 폭 기준(2열 그리드·고정 패딩)이라
+   좁은 화면에서 survey-container + landing + card 패딩이 누적돼 콘텐츠가 짓이겨진다.
+   600px 이하에서 좌우 여백을 줄이고 그리드를 1열로 떨어뜨린다. */
+@media (max-width: 600px) {
+  .register-landing {
+    padding: 36px 4px 28px;
+  }
+
+  .register-card {
+    padding: 20px 18px;
+    margin: 14px 4px;
+  }
+
+  .register-meta {
+    margin: 20px 4px 28px;
+    padding: 16px 18px;
+  }
+
+  .register-meta dl {
+    grid-template-columns: 64px 1fr;
+    gap: 6px 10px;
+  }
+
+  #btn-reg-start {
+    width: calc(100% - 8px);
+    margin: 8px 4px 28px;
+  }
+
+  /* 본인 정보·직군 선택을 2열 → 1열로 */
+  .register-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .register-radio-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .register-stepper {
+    padding: 20px 0 8px;
+  }
+
+  .register-stepper .step-line {
+    width: 22px;
+  }
+
+  /* 좁은 화면: '← 이전'은 내용 폭, '등록하고 설문 시작 →'에 남는 폭을 줘서 줄바꿈 방지 */
+  .register-actions {
+    gap: 10px;
+  }
+
+  .register-actions .btn-prev {
+    flex: 0 0 auto;
+  }
+
+  .register-actions .btn-next {
+    flex: 1;
+    white-space: nowrap;
+  }
+
+  .consent-block,
+  .consent-info {
+    padding: 14px 16px;
+  }
+
+  .consent-table th {
+    width: 84px;
+    padding: 8px 8px;
+  }
+}
