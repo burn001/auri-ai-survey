@@ -1300,6 +1300,51 @@ body {
 .tool-matrix .tool-other-text { padding: 4px 8px; border: 1px solid #d6d6d6; border-radius: 4px; font-size: 12px; width: 200px; margin-left: 6px; }
 .tool-matrix tbody tr:nth-child(even) { background: #fafafa; }
 
+/* ── 표 문항(LIKERT·IPA·TOOL) 모바일 가로 스크롤 정리 ──
+   IPA(중요도5+체감도5=10열)는 좁은 화면에 강제 압축돼 라디오가 짓이겨졌다.
+   min-width로 가로 스크롤 전환 + 첫 열(항목명) sticky 고정 + 스크롤 안내 힌트. */
+@media (max-width: 600px) {
+  /* IPA: 343px 압축 → 가로 스크롤로 풀어 셀 폭 확보 */
+  .ipa-matrix { min-width: 480px; }
+
+  /* 가로 스크롤 안내 — 스크롤해도 왼쪽에 고정 표시 */
+  .likert-table-wrap,
+  .ipa-matrix-wrap,
+  .tool-matrix-wrap { position: relative; }
+
+  .likert-table-wrap::before,
+  .ipa-matrix-wrap::before,
+  .tool-matrix-wrap::before {
+    content: "← 좌우로 밀어 모든 항목을 확인하세요";
+    display: block;
+    position: sticky;
+    left: 0;
+    width: 100%;
+    font-size: 11px;
+    color: var(--c-text-tertiary);
+    padding: 2px 0 8px;
+  }
+
+  /* 첫 열(항목명) 고정 — 스크롤해도 어떤 항목인지 유지 */
+  .likert-table thead th:first-child,
+  .likert-table tbody td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    background: var(--c-surface, #fff);
+  }
+
+  .ipa-matrix .ipa-item-h,
+  .ipa-matrix .ipa-item,
+  .tool-matrix .tool-item-h,
+  .tool-matrix .tool-item {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    background: #fff;
+  }
+}
+
 /* ── 자가등록 (공개 링크) 화면 ── */
 .register-landing {
   padding: 56px 32px 40px;
